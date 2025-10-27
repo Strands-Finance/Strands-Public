@@ -1,20 +1,19 @@
+import { expect, ethers } from "../helpers/setupTestSystem.js";
 // General
 import "dotenv/config";
-const { expect } = require("chai");
-import { ethers } from "hardhat";
-import { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers";
+// SignerWithAddress is now inferred from ethers.getSigners()
 
 // Types
-import { TestERC20SetDecimals, Strands250 } from "../../typechain-types";
+import type { TestERC20SetDecimals, Strands250 } from "../../typechain-types/index.js";
 import { parseEther } from "ethers";
 
 describe("Strands250 - Testing NFT", () => {
   let Strands250: Strands250,
-    deployer: SignerWithAddress,
-    alice: SignerWithAddress,
-    bob: SignerWithAddress,
-    accounts: SignerWithAddress[],
-    admin: SignerWithAddress,
+    deployer: any,
+    alice: any,
+    bob: any,
+    accounts: any[],
+    admin: any,
     FeeToken: TestERC20SetDecimals;
 
   // Token url

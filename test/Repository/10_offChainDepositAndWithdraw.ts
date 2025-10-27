@@ -1,30 +1,32 @@
-import {
-  seedFixture,
-  seedEmptyRepositoryFixture,
-} from "../../scripts/utils/fixture";
-import { hre } from "../../scripts/utils/testSetup";
-import { fromBN, toBN } from "../../scripts/utils/web3utils";
-import { printRepositoryStatus } from "../../scripts/utils/debugging";
-import RepositoryABI from "../../artifacts/contracts/Repository.sol/Repository.json";
-import MockUSDC from "../../artifacts/contracts/test-helpers/TestERC20SetDecimals.sol/TestERC20SetDecimals.json";
-import { ethers, Interface } from "ethers";
-const { expect } = require("chai");
+import { hre, expect, ethers, loadFixture, createFixture, approveAndDeposit, getAlice, getBob } from "../helpers/setupTestSystem.js";
+import { fromBN, toBN } from "../helpers/testUtils.js";
 
-describe("Repository OffChainDeposit & Withdraw - Testing (using DirectInputBookKeeper)", function () {
+describe(`Repository OffChainDeposit & Withdraw - Testing (using directInputBookKeeper)`, function () {
+  let alice: any;
+  let bob: any;
+
+  const deployContractsFixture = createFixture(
+    'directInput',
+    'none',
+    'USDC',
+    true,
+    0,
+    "0"
+  );
+
   beforeEach(async () => {
-    await seedEmptyRepositoryFixture({
-      deployNew: true,
-      useDirectInputBookKeeper: true,
-      useWalletExecutor: true,
-    });
+    await loadFixture(deployContractsFixture);
+
+    alice = getAlice();
+    bob = getBob();
   });
 
   describe("OffChain Deposit", async () => {
     it("non controller can not call offChainDeposit", async () => {
       await expect(
         hre.f.SC.repositoryContracts[0].repository
-          .connect(hre.f.SC.userAccount)
-          .offChainDeposit18(toBN("1000"), toBN("1"), hre.f.alice.address)
+          .connect(bob)
+          .offChainDeposit18(toBN("1000"), toBN("1"), alice.address)
       ).to.be.revertedWithCustomError(
         hre.f.SC.repositoryContracts[0].repository,
         "OnlyController"
@@ -36,15 +38,15 @@ describe("Repository OffChainDeposit & Withdraw - Testing (using DirectInputBook
 
       await hre.f.SC.repositoryContracts[0].repository
         .connect(hre.f.SC.repositoryContracts[0].controller)
-        .offChainDeposit18(toBN("1000"), toBN("1"), hre.f.alice.address);
+        .offChainDeposit18(toBN("1000"), toBN("1"), alice.address);
       const balance =
         await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          hre.f.alice.address
+          alice.address
         );
       expect(balance).to.be.eq(toBN("1000"));
-      // Check valueOutsideRepositorySettled set as False
+      // Check valueOffChainSettled set as False
       expect(
-        await hre.f.SC.repositoryContracts[0].bookKeeper.valueOutsideRepositorySettled()
+        await hre.f.SC.repositoryContracts[0].bookKeeper.valueOffChainSettled()
       ).to.be.eq(false);
     });
   });
@@ -53,8 +55,8 @@ describe("Repository OffChainDeposit & Withdraw - Testing (using DirectInputBook
     it("non controller can not call offChainWithdraw", async () => {
       await expect(
         hre.f.SC.repositoryContracts[0].repository
-          .connect(hre.f.SC.userAccount)
-          .offChainWithdraw(toBN("1000"), toBN("1"), hre.f.alice.address)
+          .connect(bob)
+          .offChainWithdraw(toBN("1000"), toBN("1"), alice.address)
       ).to.be.revertedWithCustomError(
         hre.f.SC.repositoryContracts[0].repository,
         "OnlyController"
@@ -65,7 +67,7 @@ describe("Repository OffChainDeposit & Withdraw - Testing (using DirectInputBook
       await expect(
         hre.f.SC.repositoryContracts[0].repository
           .connect(hre.f.SC.repositoryContracts[0].controller)
-          .offChainWithdraw(toBN("1000"), toBN("1"), hre.f.alice.address)
+          .offChainWithdraw(toBN("1000"), toBN("1"), alice.address)
       ).to.be.revertedWithCustomError(hre.f.SC.repositoryContracts[0].repository, "InsufficientRepositoryTokenBalance"
       );
     });
@@ -78,48 +80,46 @@ describe("Repository OffChainDeposit & Withdraw - Testing (using DirectInputBook
         .offChainDeposit18(
           offChainDepositAmount,
           toBN("1"),
-          hre.f.alice.address
+          alice.address
         );
 
-      // Check valueOutsideRepositorySettled set as False
+      // Check valueOffChainSettled set as False
       expect(
-        await hre.f.SC.repositoryContracts[0].bookKeeper.valueOutsideRepositorySettled()
+        await hre.f.SC.repositoryContracts[0].bookKeeper.valueOffChainSettled()
       ).to.be.eq(false);
-      // mark valueOutsideRepository
+      // mark valueOffChain
       await hre.f.SC.repositoryContracts[0].bookKeeper
         .connect(hre.f.SC.repositoryContracts[0].controller)
-        .markValueOutsideRepository18(
+        .markValueOffChain18(
           offChainDepositAmount,
           1000,
-          toBN("1", 18)
+          toBN("1")
         );
-      // set valueOutsideRepositorySettled to true
+      // set valueOffChainSettled to true
       await hre.f.SC.repositoryContracts[0].bookKeeper
         .connect(hre.f.SC.repositoryContracts[0].controller)
-        .markValueOutsideRepositorySettled(true);
+        .markValueOffChainSettled(true);
 
       // Call withdraw
       await expect(hre.f.SC.repositoryContracts[0].repository
         .connect(hre.f.SC.repositoryContracts[0].controller)
-        .offChainWithdraw(toBN("2000"), toBN("1"), hre.f.alice.address)
+        .offChainWithdraw(toBN("2000"), toBN("1"), alice.address)
       ).to.be.revertedWithCustomError(hre.f.SC.repositoryContracts[0].repository, "InsufficientRepositoryTokenBalance");
     });
 
     it("offChainWithdraw work with correct custodial wallet and amount", async () => {
+      // console.log("--before on chain deposit AliceBalance=%s",
+      // fromBN(await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(alice.address)))
+      // printRepositoryStatus(hre.f.SC.repositoryContracts[0])
 
       // on chain deposit first
-      const amount = ethers.parseUnits("10000", 6);
-      await hre.f.SC.MockUSDC.connect(hre.f.alice).approve(
-        hre.f.SC.repositoryContracts[0].repository,
-        amount
-      );
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.alice)
-        .initiateDeposit(amount, 0);
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .processDeposits(1);
+      const amount = toBN("10000", 6);
+      await approveAndDeposit(alice, amount, true, 'USDC');
 
+      // Check alice received the correct amount of repository tokens
+      expect(
+        await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(alice.address)
+      ).to.be.closeTo(toBN("10000"), toBN("1"));
 
       await hre.f.SC.repositoryContracts[0].bookKeeper
         .connect(hre.f.SC.repositoryContracts[0].controller)
@@ -132,30 +132,32 @@ describe("Repository OffChainDeposit & Withdraw - Testing (using DirectInputBook
         .offChainDeposit18(
           offChainDepositAmount,
           toBN("1"),
-          hre.f.SC.userAccount.address
+          bob.address
         );
 
       const userBalancBefore =
         await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          hre.f.SC.userAccount
+          bob
         );
+      // console.log("--after off chain deposit AliceBalance=%s", fromBN(userBalancBefore))
+      // await printRepositoryStatus(hre.f.SC.repositoryContracts[0])
 
-      // Check valueOutsideRepositorySettled set as False
+      // Check valueOffChainSettled set as False
       expect(
-        await hre.f.SC.repositoryContracts[0].bookKeeper.valueOutsideRepositorySettled()
+        await hre.f.SC.repositoryContracts[0].bookKeeper.valueOffChainSettled()
       ).to.be.eq(false);
-      // mark valueOutsideRepository
+      // mark valueOffChain
       await hre.f.SC.repositoryContracts[0].bookKeeper
         .connect(hre.f.SC.repositoryContracts[0].controller)
-        .markValueOutsideRepository18(
+        .markValueOffChain18(
           offChainDepositAmount,
           1000,
-          toBN("1", 18)
+          toBN("1")
         );
-      // set valueOutsideRepositorySettled to true
+      // set valueOffChainSettled to true
       await hre.f.SC.repositoryContracts[0].bookKeeper
         .connect(hre.f.SC.repositoryContracts[0].controller)
-        .markValueOutsideRepositorySettled(true);
+        .markValueOffChainSettled(true);
 
       // off chain withdraw
       await hre.f.SC.repositoryContracts[0].repository
@@ -163,17 +165,18 @@ describe("Repository OffChainDeposit & Withdraw - Testing (using DirectInputBook
         .offChainWithdraw(
           userBalancBefore,
           toBN("1"),
-          hre.f.SC.userAccount.address
+          bob.address
         );
       const userBalanceAfter =
         await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          hre.f.SC.userAccount
+          bob
         );
-
+      // console.log("--after off chain withdraw AliceBalance=%s", fromBN(userBalanceAfter))
+      // await printRepositoryStatus(hre.f.SC.repositoryContracts[0])
       expect(userBalanceAfter).to.be.eq(toBN("0"));
-      // Check valueOutsideRepositorySettled set as False
+      // Check valueOffChainSettled set as False
       expect(
-        await hre.f.SC.repositoryContracts[0].bookKeeper.valueOutsideRepositorySettled()
+        await hre.f.SC.repositoryContracts[0].bookKeeper.valueOffChainSettled()
       ).to.be.eq(false);
     });
   });

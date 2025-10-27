@@ -2,6 +2,28 @@
 pragma solidity ^0.8.20;
 
 interface IStrandsPosition {
+  // State errors
+  error InvalidPositionTokenId();
+  error PositionDeletionInProgress();
+  error NoDeletionInProgress();
+
+  // Validation errors
+  error InvalidExecutionTime();
+  error InvalidSymbolId();
+  error BeforeLastTradingDate();
+
+  // Existence errors
+  error AlreadyExists();
+  error TradeDoesNotExist();
+
+  // Authorization errors
+  error UnauthorizedOwner();
+
+  // Input errors
+  error EmptyString();
+  error ZeroAddress();
+  error ZeroValue();
+
   struct TradeDetails {
     string tag50;
     string tradeId;
@@ -9,11 +31,12 @@ interface IStrandsPosition {
     uint quantity;
     uint purchasePrice;
     uint executionTime; // Must set to executionTime>0 so we can use executionTime==0 to identify if AccountDetails is null
+    uint tradeDate;
   }
 
   struct SymbolInfo {
     string symbol;
-    string source;
+    string exchange;
   }
 
   struct PositionDetails {
@@ -24,18 +47,21 @@ interface IStrandsPosition {
     uint lastTradingDate;
     bool expired;
     uint tokenId;
+    int256 totalQuantity; // Net quantity: longs are positive, shorts are negative
   }
 
   event PositionCreated(
     uint256 indexed tokenId,
     address indexed owner,
+    uint256 symbolId,
     string symbol,
     string exchange,
     string clearingFirm,
     string accountNumber,
-    uint256 lastTradingDate
+    uint256 lastTradingDate,
+    bool expired
   );
-
+  event PositionDeleted(uint256 indexed tokenId);
   event PositionExpired(address tokenOwner, uint tokenId);
 
   event TradeAdded(
@@ -45,11 +71,28 @@ interface IStrandsPosition {
     uint256 quantity,
     uint256 price,
     uint256 executionTime,
-    bool isLong
+    bool isLong,
+    uint256 tradeDate,
+    int256 totalQuantity
+  );
+  event TradeDeleted(
+    uint256 indexed tokenId,
+    string tradeId,
+    int256 totalQuantity
   );
 
-  event TradeDeleted(uint256 indexed tokenId, string tradeId);
-  event PositionDeleted(uint256 indexed tokenId);
+  event SymbolIdUpdated(
+    uint256 indexed tokenId,
+    uint256 oldSymbolId,
+    uint256 newSymbolId
+  );
+  event SymbolInfoUpdated(
+    uint256 indexed symbolId,
+    string oldSymbol,
+    string oldExchange,
+    string newSymbol,
+    string newExchange
+  );
 
   function transferFrom(address from, address to, uint256 id) external;
 
@@ -67,12 +110,6 @@ interface IStrandsPosition {
   function getPositionDetails(
     uint tokenId
   ) external view returns (PositionDetails memory);
-
-  function getPositionsByAccount(
-    string memory clearingFirm_,
-    string memory accountNumber_,
-    bool includeExpiredPosition_
-  ) external view returns (PositionDetails[] memory);
 
   function getPositionIdsByAccount(
     string memory clearingFirm_,

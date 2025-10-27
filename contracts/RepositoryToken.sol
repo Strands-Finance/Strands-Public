@@ -6,7 +6,6 @@ pragma solidity 0.8.20;
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IGateKeeper} from "./interfaces/IGateKeeper.sol";
 import {IRepository} from "./interfaces/IRepository.sol";
-import "./synthetix/Owned.sol";
 
 /**
  * @title RepositoryToken
@@ -14,7 +13,7 @@ import "./synthetix/Owned.sol";
  * @dev An ERC20 token which represents a share of the Repository.
  * It is minted when users deposit, and burned when users withdraw.
  */
-contract RepositoryToken is ERC20, Owned {
+contract RepositoryToken is ERC20 {
   /// @dev The repository for which these tokens represent a share of
   address public immutable repository;
 
@@ -31,14 +30,17 @@ contract RepositoryToken is ERC20, Owned {
   /**
    * @param name_ Token collection name
    * @param symbol_ Token collection symbol
+   * @param gateKeeper_ Gate keeper address for transfer restrictions
+   * @param repository_ Repository address that owns this token
    */
   constructor(
     string memory name_,
     string memory symbol_,
-    address gateKeeper_
-  ) ERC20(name_, symbol_) Owned() {
+    address gateKeeper_,
+    address repository_
+  ) ERC20(name_, symbol_) {
     // sets the repository address
-    repository = msg.sender;
+    repository = repository_;
     _tokenName = name_;
     gateKeeper = gateKeeper_;
   }

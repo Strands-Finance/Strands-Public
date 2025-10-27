@@ -1,7 +1,12 @@
-import { ethers } from 'hardhat';
+// Import the hardhat ethers for provider access
+import { getHardhatEthers } from "../../test/helpers/setupTestSystem.js";
 
 export function send(method: string, params?: Array<any>) {
-  return ethers.provider.send(method, params === undefined ? [] : params);
+  const hardhatEthers = getHardhatEthers();
+  if (!hardhatEthers) {
+    throw new Error("Hardhat ethers not initialized. Make sure deployFixture has been called first.");
+  }
+  return hardhatEthers.provider.send(method, params === undefined ? [] : params);
 }
 
 export function mineBlock() {
@@ -9,7 +14,11 @@ export function mineBlock() {
 }
 
 export async function currentTime() {
-  const { timestamp } = await ethers.provider.getBlock('latest');
+  const hardhatEthers = getHardhatEthers();
+  if (!hardhatEthers) {
+    throw new Error("Hardhat ethers not initialized. Make sure deployFixture has been called first.");
+  }
+  const { timestamp } = await hardhatEthers.provider.getBlock('latest');
   return timestamp;
 }
 

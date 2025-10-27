@@ -1,14 +1,5 @@
 //SPDX-License-Identifier: ISC
 
-/**************************************************************
- * ░██████╗████████╗██████╗░░█████╗░███╗░░██╗██████╗░░██████╗ *
- * ██╔════╝╚══██╔══╝██╔══██╗██╔══██╗████╗░██║██╔══██╗██╔════╝ *
- * ╚█████╗░░░░██║░░░██████╔╝███████║██╔██╗██║██║░░██║╚█████╗░ *
- * ░╚═══██╗░░░██║░░░██╔══██╗██╔══██║██║╚████║██║░░██║░╚═══██╗ *
- * ██████╔╝░░░██║░░░██║░░██║██║░░██║██║░╚███║██████╔╝██████╔╝ *
- * ╚═════╝░░░░╚═╝░░░╚═╝░░╚═╝╚═╝░░╚═╝╚═╝░░╚══╝╚═════╝░╚═════╝░ *
- **************************************************************/
-
 pragma solidity ^0.8.20;
 
 import {Repository} from "./Repository.sol";
@@ -34,11 +25,8 @@ contract RepositoryFactory is IRepositoryFactory, StrandsOwned {
   function createRepository(
     address _owner,
     address _controller
-  ) external onlyController returns(address) {
-    Repository newRepository = new Repository(
-      _owner,
-      _controller
-    );
+  ) external onlyController returns (address) {
+    Repository newRepository = new Repository(_owner, _controller);
 
     deployedRepositories[repositoryCount] = newRepository;
 
@@ -63,7 +51,7 @@ contract RepositoryFactory is IRepositoryFactory, StrandsOwned {
   }
 
   function setFeeRecipient(address _feeRecipient) external onlyOwner {
-     if (_feeRecipient == address(0)) {
+    if (_feeRecipient == address(0)) {
       revert InvalidRecipient();
     }
 

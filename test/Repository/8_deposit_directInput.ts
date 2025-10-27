@@ -1,336 +1,113 @@
-const { ethers } = require("hardhat");
-import { expect } from "chai";
-import { seedEmptyRepositoryFixture } from "../../scripts/utils/fixture";
-import { hre } from "../../scripts/utils/testSetup";
-import { fromBN, toBN } from "../../scripts/utils/web3utils";
-import {seedWithUSDC} from "../../scripts/seedTestSystem";
+import { hre, expect, loadFixture, createFixture, seedWithUSDC, approveAndDeposit, getAlice, getBob } from "../helpers/setupTestSystem.js";
+import { toBN } from "../helpers/testUtils.js";
+import type { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 
-describe("Repository Deposit - Testing (using DirectInputBookKeeper) with USDC as depositAsset", function () {
-  beforeEach(async () => {
-    await seedEmptyRepositoryFixture({
-      deployNew: true,
-      useDirectInputBookKeeper: true,
-      useWalletExecutor: true,
-    });
-  });
+describe(`Repository Deposit Operations`, function () {
+  let alice: HardhatEthersSigner;
+  let bob: HardhatEthersSigner;
 
-  describe("depositing depositAsset to contract", function () {
-    it("should revert if amount is zero", async function () {
-      await expect(
-        hre.f.SC.repositoryContracts[0].repository.initiateDeposit(0, 0)
-      ).to.be.revertedWithCustomError(
-        hre.f.SC.repositoryContracts[0].repository,
-        "InvalidAmount"
-      );
+  const usdcFixture = createFixture('directInput', 'none', 'USDC', true, 0, "0");
+  const wethFixture = createFixture('directInput', 'none', 'WETH', true, 0, "0");
+
+  describe("USDC Deposit Operations", function () {
+    beforeEach(async () => {
+      await loadFixture(usdcFixture);
+      alice = getAlice();
+      bob = getBob();
     });
 
-    it("should transfer mockUSDC from msg.sender to the contract", async function () {
-      expect(
-        await hre.f.SC.MockUSDC.balanceOf(await hre.f.alice.getAddress())
-      ).equal(ethers.parseUnits("100000", 6));
-      // initiate deposit
-      const amount = ethers.parseUnits("100", 6);
+    it("should handle basic deposit validation and operations", async function () {
+      const repo = hre.f.SC.repositoryContracts[0].repository;
+      const repoToken = hre.f.SC.repositoryContracts[0].repositoryToken;
 
-      // // approve the repository to manage usdc on your behalf
-      await hre.f.SC.MockUSDC.connect(hre.f.alice).approve(
-        await hre.f.SC.repositoryContracts[0].repository.getAddress(),
-        amount
-      );
+      // Test zero amount validation
+      await expect(repo.initiateDeposit(0, 0))
+        .to.be.revertedWithCustomError(repo, "InvalidAmount");
 
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.alice)
-        .initiateDeposit(amount, 0);
+      // Test basic deposit and token minting
+      expect(await hre.f.SC.MockUSDC.balanceOf(await alice.getAddress())).equal(toBN("100000", 6));
+
+      const amount = toBN("1000", 6);
+      await approveAndDeposit(alice, amount, true, 'USDC');
+
+      expect(await repoToken.balanceOf(await alice.getAddress())).to.be.closeTo(toBN("1000", 18), toBN("1"));
+      expect(await repo.getNAV()).to.be.closeTo(toBN("1"), toBN("0.001"));
     });
 
-    it("should mint repository tokens to the msg.sender", async function () {
-      expect(
-        await hre.f.SC.MockUSDC.balanceOf(await hre.f.alice.getAddress())
-      ).equal(ethers.parseUnits("100000", 6));
+    it("should handle multi-user deposits and NAV calculations", async () => {
+      const repo = hre.f.SC.repositoryContracts[0].repository;
+      const repoToken = hre.f.SC.repositoryContracts[0].repositoryToken;
+      const bookKeeper = hre.f.SC.repositoryContracts[0].bookKeeper;
+      const controller = hre.f.SC.repositoryContracts[0].controller;
 
-      // initiate deposit
-      const amount = ethers.parseUnits("1000", 6);
-
-      // // approve the repository to manage usdc on your behalf
-      await hre.f.SC.MockUSDC.connect(hre.f.alice).approve(
-        await hre.f.SC.repositoryContracts[0].repository.getAddress(),
-        amount
-      );
-
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.alice)
-        .initiateDeposit(amount, 0);
-
-      // process deposit
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .processDeposits(1);
-
-      expect(
-        await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.alice.getAddress()
-        )
-      ).to.be.closeTo(ethers.parseUnits("1000", 18), toBN("1"));
-    });
-
-    it("correctly calculate the amount of tokens that the user should receive", async function () {
       const [usdcAmount, amount] = [100e6, toBN("100")];
-
-      await hre.f.SC.MockUSDC.connect(hre.f.alice).approve(
-        hre.f.SC.repositoryContracts[0].repository.getAddress(),
-        usdcAmount
-      );
-
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.alice)
-        .initiateDeposit(usdcAmount, toBN("1"));
-
-      const nav = await hre.f.SC.repositoryContracts[0].repository.getNAV();
-      const estimateValue = (amount / nav) * toBN("1"); // 1e18 is being cancelled out
-
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .processDeposits(1);
-
-      expect(
-        await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.alice.getAddress()
-        )
-      ).to.be.closeTo(estimateValue, toBN("1"));
-    });
-
-    it("correctly calculate amount of Repository Token when there are multiple actors", async () => {
-      const [usdcAmount, amount] = [100e6, toBN("100")];
-
-      const alice = hre.f.alice;
-      const bob = hre.f.signers[10];
-
-      // seed bob with usdc
       await seedWithUSDC(bob);
 
-      // check that NAV is equal to 1e18
-      await expect(
-        await hre.f.SC.repositoryContracts[0].repository.getNAV()
-      ).to.be.closeTo(toBN("1"), toBN("1"));
+      // Multi-user deposit test
+      await approveAndDeposit(alice, usdcAmount, true, 'USDC');
+      await approveAndDeposit(bob, usdcAmount, true, 'USDC');
 
-      await hre.f.SC.MockUSDC.connect(alice).approve(
-        hre.f.SC.repositoryContracts[0].repository.getAddress(),
-        usdcAmount
-      );
-      await hre.f.SC.MockUSDC.connect(bob).approve(
-        hre.f.SC.repositoryContracts[0].repository.getAddress(),
-        usdcAmount
-      );
+      expect(await repoToken.balanceOf(await alice.getAddress())).to.be.closeTo(amount, toBN("1"));
+      expect(await repoToken.balanceOf(await bob.getAddress())).to.be.closeTo(amount, toBN("1"));
+      expect(await repoToken.totalSupply()).to.be.closeTo(toBN("200"), toBN("0.1"));
 
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(alice)
-        .initiateDeposit(usdcAmount, toBN("1"));
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(bob)
-        .initiateDeposit(usdcAmount, toBN("1"));
-
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .processDeposits(1);
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .processDeposits(2);
-
-      expect(
-        await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await alice.getAddress()
-        )
-      ).to.be.closeTo(amount, toBN("1"));
-      expect(
-        await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await bob.getAddress()
-        )
-      ).to.be.closeTo(amount, toBN("1"));
+      // Test NAV update scenario
+      const nav = await repo.getNAV();
+      await bookKeeper.connect(controller).markValueOffChain18(toBN("200"), 1000, nav * 2n);
+      expect(await repo.getNAV()).to.be.closeTo(toBN("2"), toBN("0.1"));
     });
 
-    it("correctly calculate amount of Repository Token after valueOutsideRepository update", async () => {
+    it("should calculate correct tokens after value changes", async function () {
+      const repo = hre.f.SC.repositoryContracts[0].repository;
+      const repoToken = hre.f.SC.repositoryContracts[0].repositoryToken;
+      const bookKeeper = hre.f.SC.repositoryContracts[0].bookKeeper;
+      const controller = hre.f.SC.repositoryContracts[0].controller;
+
       const [usdcAmount, amount] = [100e6, toBN("100")];
-
-      const alice = hre.f.alice;
-      const bob = hre.f.signers[10];
-
-      // seed bob with usdc
       await seedWithUSDC(bob);
 
-      // check that NAV is equal to 1e18
-      await expect(
-        await hre.f.SC.repositoryContracts[0].repository.getNAV()
-      ).to.be.closeTo(toBN("1"), toBN("1"));
+      // First deposit
+      await approveAndDeposit(alice, usdcAmount, true, 'USDC');
+      const nav = await repo.getNAV();
+      expect(await repoToken.balanceOf(await alice.getAddress())).to.be.closeTo(amount, toBN("1"));
 
-      await hre.f.SC.MockUSDC.connect(alice).approve(
-        hre.f.SC.repositoryContracts[0].repository.getAddress(),
-        usdcAmount
-      );
-      await hre.f.SC.MockUSDC.connect(bob).approve(
-        hre.f.SC.repositoryContracts[0].repository.getAddress(),
-        usdcAmount
-      );
+      // Double the pool value
+      await bookKeeper.connect(controller).markValueOffChain18(toBN("100"), 1000, nav * 2n);
 
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(alice)
-        .initiateDeposit(usdcAmount, toBN("1"));
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(bob)
-        .initiateDeposit(usdcAmount, toBN("1"));
-
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .processDeposits(2);
-
-      expect(
-        await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await alice.getAddress()
-        )
-      ).to.be.closeTo(amount, toBN("1"));
-      expect(
-        await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await bob.getAddress()
-        )
-      ).to.be.closeTo(amount, toBN("1"));
-
-      // should be 200 tokens with a NAV of 1
-      expect(
-        await hre.f.SC.repositoryContracts[0].repositoryToken.totalSupply()
-      ).to.be.closeTo(toBN("200"), toBN("1"));
-      // checking NAV
-      const nav = await hre.f.SC.repositoryContracts[0].repository.getNAV();
-      expect(nav).to.be.eq(toBN("1"));
-
-      // update valueOutsideRepository
-      await hre.f.SC.repositoryContracts[0].bookKeeper
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .markValueOutsideRepository18(toBN("200"), 1000, nav * 2n);
-
-      // check NAV
-      expect(
-        await hre.f.SC.repositoryContracts[0].repository.getNAV()
-      ).to.be.closeTo(toBN("2"), toBN("0.1"));
+      // Second deposit at higher NAV
+      await approveAndDeposit(bob, usdcAmount, true, 'USDC');
+      expect(await repo.getNAV()).to.be.closeTo(toBN("2"), toBN("0.1"));
+      expect(await repoToken.balanceOf(await bob.getAddress())).to.be.closeTo(toBN("50"), toBN("0.1"));
+      expect(await repoToken.totalSupply()).to.be.closeTo(toBN("150"), toBN("0.1"));
     });
 
-    it("Double value of the pool and see that the correct number of tokens are minted", async function () {
-      const [usdcAmount, amount] = [100e6, toBN("100")];
-
-      const alice = hre.f.alice;
-      const bob = hre.f.signers[10];
-
-      // seed bob with usdc
-      await seedWithUSDC(bob);
-
-      // check that NAV is equal to 1e18
+    it("should reject ETH deposits for USDC repositories", async function () {
       await expect(
-        await hre.f.SC.repositoryContracts[0].repository.getNAV()
-      ).to.be.closeTo(toBN("1"), toBN("1"));
-
-      await hre.f.SC.MockUSDC.connect(alice).approve(
-        hre.f.SC.repositoryContracts[0].repository.getAddress(),
-        usdcAmount
-      );
-      await hre.f.SC.MockUSDC.connect(bob).approve(
-        hre.f.SC.repositoryContracts[0].repository.getAddress(),
-        usdcAmount
-      );
-
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(alice)
-        .initiateDeposit(usdcAmount, toBN("1"));
-
-      // checking NAV
-      const nav = await hre.f.SC.repositoryContracts[0].repository.getNAV();
-      expect(nav).to.be.closeTo(toBN("1"), toBN("1"));
-
-      // process alice's deposit
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .processDeposits(1);
-
-      expect(
-        await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await alice.getAddress()
-        )
-      ).to.be.closeTo(amount, toBN("1"));
-
-      // update ValueOutsideRepository
-      await hre.f.SC.repositoryContracts[0].bookKeeper
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .markValueOutsideRepository18(toBN("100"), 1000, nav * 2n);
-
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(bob)
-        .initiateDeposit(usdcAmount, toBN("1"));
-
-      // check NAV
-      expect(
-        await hre.f.SC.repositoryContracts[0].repository.getNAV()
-      ).to.be.closeTo(toBN("2"), toBN("0.1"));
-
-      // process bob's deposit
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .processDeposits(1);
-
-      expect(
-        await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await bob.getAddress()
-        )
-      ).to.be.closeTo(toBN("50"), toBN("1"));
-      // should be 150 tokens
-      expect(
-        await hre.f.SC.repositoryContracts[0].repositoryToken.totalSupply()
-      ).to.be.closeTo(toBN("150"), toBN("1"));
-    });
-  });
-
-  describe("depositing ETH", function () {
-    it("shouldnt be able to deposit ETH", async function () {
-      // let [aum18,ts] = await hre.f.SC.repositoryContracts[0].repository.getLastKnownAUM()
-      // console.log("aum18=",fromBN(aum18))
-      // console.log("totalValueCap=",fromBN(await hre.f.SC.repositoryContracts[0].repository.totalValueCap18()))
-
-      await expect(
-        hre.f.SC.repositoryContracts[0].repository.connect(hre.f.alice).initiateDepositEth(0, {
-          value: toBN('1',6)
+        hre.f.SC.repositoryContracts[0].repository.connect(alice).initiateDepositEth(0, {
+          value: toBN('1', 6)
         })
       ).to.be.revertedWithCustomError(hre.f.SC.repositoryContracts[0].repository, "CannnotDepositAssetType");
     });
   });
-});
-
-describe("Repository Deposit - Testing (using DirectInputBookKeeper) with WETH as depositAsset", function () {
-  beforeEach(async () => {
-    await seedEmptyRepositoryFixture({
-      deployNew: true,
-      useDirectInputBookKeeper: true,
-      useWalletExecutor: true,
-      wethAsDepositAsset: true,
+  describe("WETH Deposit Operations", function () {
+    beforeEach(async () => {
+      await loadFixture(wethFixture);
+      alice = getAlice();
+      bob = getBob();
     });
-  });
 
-  describe("depositing eth to contract", function () {
-    it("should be able to deposit ETH", async function () {
-      const alice = await hre.f.alice
+    it("should handle ETH deposits for WETH repositories", async function () {
+      const repo = hre.f.SC.repositoryContracts[0].repository;
+      const repoToken = hre.f.SC.repositoryContracts[0].repositoryToken;
+      const controller = hre.f.SC.repositoryContracts[0].controller;
       const amount = toBN("1");
 
+      await repo.connect(alice).initiateDepositEth(toBN('1'), { value: amount });
+      expect(await hre.f.SC.MockWETH.balanceOf(repo.getAddress())).equal(amount);
 
-      await hre.f.SC.repositoryContracts[0].repository.connect(alice).initiateDepositEth(toBN('1'), { value: amount });
-
-
-      expect(
-        await hre.f.SC.MockWETH.balanceOf(await hre.f.SC.repositoryContracts[0].repository.getAddress())
-      ).equal(amount);
-
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .processDeposits(1);
-
-      expect(
-        await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await alice.getAddress()
-        )
-      ).to.be.closeTo(amount, amount);
+      await repo.connect(controller).processDeposits(1);
+      // Expect exactly 1 WETH worth of tokens (with tiny tolerance for rounding)
+      expect(await repoToken.balanceOf(await alice.getAddress())).to.be.closeTo(amount, toBN("0.001", 18));
     });
   });
 });

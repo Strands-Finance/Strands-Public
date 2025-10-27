@@ -1,42 +1,71 @@
-import { seedFixture } from "../../scripts/utils/fixture";
-import { expect, hre } from "../../scripts/utils/testSetup";
-import { toBN,fromBN } from "../../scripts/utils/web3utils";
+import { expect, hre, ethers, loadFixture, createFixture, approveAndDeposit, getAlice, getBob } from "../helpers/setupTestSystem.js";
+import { toBN,fromBN } from "../helpers/testUtils.js";
+import type { Repository, RepositoryToken, TestERC20SetDecimals, WhitelistGateKeeper } from "../../typechain-types/index.js";
+import type { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 
-describe("WhitelistGateKeeper - Testing", () => {
-  beforeEach(() => seedFixture({ useDirectInputBookKeeper: true,useWhitelistGateKeeper: true }));
+describe(`whitelistGateKeeper - Testing (using directInputBookKeeper)`, () => {
+  let alice: HardhatEthersSigner;
+  let bob: HardhatEthersSigner;
+
+  // Contract shortcuts for better readability
+  let repo: Repository;
+  let repoToken: RepositoryToken;
+  let mockUSDC: TestERC20SetDecimals;
+  let gateKeeper: WhitelistGateKeeper;
+  let controller: HardhatEthersSigner;
+
+  // Cached addresses to avoid repeated async calls
+  let repoAddress: string;
+  let aliceAddress: string;
+  let bobAddress: string;
+
+  const deployContractsFixture = createFixture(
+    'directInput',
+    'whitelist',
+    'USDC',
+    true,
+    10000,
+    "0"
+  );
+
+  beforeEach(async () => {
+    await loadFixture(deployContractsFixture);
+
+    // Initialize signers
+    alice = getAlice();
+    bob = getBob();
+
+    // Set up contract shortcuts
+    repo = hre.f.SC.repositoryContracts[0].repository;
+    repoToken = hre.f.SC.repositoryContracts[0].repositoryToken;
+    mockUSDC = hre.f.SC.MockUSDC;
+    gateKeeper = hre.f.SC.gateKeeper;
+    controller = hre.f.deployer;
+
+    // Cache frequently used addresses
+    [repoAddress, aliceAddress, bobAddress] = await Promise.all([
+      repo.getAddress(),
+      alice.getAddress(),
+      bob.getAddress()
+    ]);
+  });
 
   describe("Whitelisting & Unwhitelisting(depositWhitelistEnabled = true)", () => {
-    it("Non controller can't set the whitelisted users", async () => {
+    it("should revert when non-controller tries to set whitelisted users", async () => {
       await expect(
-        hre.f.SC.gateKeeper
-          .connect(hre.f.alice)
-          .setUserCanDeposit([hre.f.alice.address])
-      ).to.be.revertedWithCustomError(hre.f.SC.gateKeeper, "OnlyController");
+        gateKeeper.connect(alice).setUserCanDeposit([aliceAddress])
+      ).to.be.revertedWithCustomError(gateKeeper, "OnlyController");
     });
 
-    it("Only controller can set the whitelisted users", async () => {
-      await hre.f.SC.gateKeeper
-        .connect(hre.f.deployer)
-        .setUserCanDeposit([hre.f.alice.address]);
+    it("should allow controller to set whitelisted users", async () => {
+      await gateKeeper.connect(controller).setUserCanDeposit([aliceAddress]);
 
-      expect(
-        await hre.f.SC.gateKeeper.canDeposit(hre.f.alice.address)
-      ).to.be.eq(true);
+      expect(await gateKeeper.canDeposit(aliceAddress)).to.be.eq(true);
     });
 
-    it("alice should be able to deposit", async function () {
-      const amount = ethers.parseUnits("100", 6);
-      await hre.f.SC.MockUSDC.connect(hre.f.SC.deployer).mint(
-        await hre.f.alice.getAddress(), amount);
-      await hre.f.SC.MockUSDC.connect(
-        hre.f.alice
-      ).approve(
-        hre.f.SC.repositoryContracts[0].repository.getAddress(),
-        amount
-      );
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.alice)
-        .initiateDeposit(amount, 0);
+    it("should allow whitelisted user to deposit", async function () {
+      const amount = toBN("100", 6);
+      await approveAndDeposit(alice, amount, false, 'USDC');
 
       // console.log("AUM=%s",fromBN(await hre.f.SC.repositoryContracts[0].repository.getAUM()))
       // console.log("repository balance=%s",fromBN(await(hre.f.SC.MockUSDC.balanceOf(
@@ -57,7 +86,7 @@ describe("WhitelistGateKeeper - Testing", () => {
 
       expect(
         await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          hre.f.alice.address
+          alice.address
         )
       ).to.be.closeTo(estimateValue, toBN("1"));
     });
@@ -65,37 +94,37 @@ describe("WhitelistGateKeeper - Testing", () => {
     it("Non controller can't unset the whitelisted users", async () => {
       await expect(
         hre.f.SC.gateKeeper
-          .connect(hre.f.alice)
-          .unsetUserCanDeposit([hre.f.alice.address])
+          .connect(alice)
+          .unsetUserCanDeposit([alice.address])
       ).to.be.revertedWithCustomError(hre.f.SC.gateKeeper, "OnlyController");
     });
 
     it("Only controller can unset the whitelisted users", async () => {
       await hre.f.SC.gateKeeper
         .connect(hre.f.deployer)
-        .unsetUserCanDeposit([hre.f.alice.address]);
+        .unsetUserCanDeposit([alice.address]);
 
       expect(
-        await hre.f.SC.gateKeeper.canDeposit(hre.f.alice.address)
+        await hre.f.SC.gateKeeper.canDeposit(alice.address)
       ).to.be.eq(false);
     });
 
     it("alice should NOT be able to deposit", async function () {
       await hre.f.SC.gateKeeper
         .connect(hre.f.deployer)
-        .unsetUserCanDeposit([hre.f.alice.address]);
+        .unsetUserCanDeposit([alice.address]);
 
-      const amount = ethers.parseUnits("100", 6);
+      const amount = toBN("100", 6);
       await hre.f.SC.MockUSDC.connect(hre.f.SC.deployer).mint(
-        await hre.f.alice.getAddress(), amount);
+        await alice.getAddress(), amount);
       await hre.f.SC.MockUSDC.connect(
-        hre.f.alice
+        alice
       ).approve(
         hre.f.SC.repositoryContracts[0].repository.getAddress(),
         amount
       );
       await expect(hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.alice).initiateDeposit(amount, toBN("1"))).to.be.
+        .connect(alice).initiateDeposit(amount, toBN("1"))).to.be.
         revertedWithCustomError(hre.f.SC.repositoryContracts[0].repository, "NotWhitelisted");
     });
   });
@@ -107,9 +136,9 @@ describe("WhitelistGateKeeper - Testing", () => {
         .setDepositWhitelistEnabled(false);
       await hre.f.SC.gateKeeper
         .connect(hre.f.deployer)
-        .unsetUserCanDeposit([hre.f.alice.address]);
+        .unsetUserCanDeposit([alice.address]);
       expect(
-        await hre.f.SC.gateKeeper.canDeposit(hre.f.alice.address)
+        await hre.f.SC.gateKeeper.canDeposit(alice.address)
       ).to.be.eq(true);
     });
   });
@@ -118,51 +147,44 @@ describe("WhitelistGateKeeper - Testing", () => {
     it("Non controller can't blacklist users for transferring Repository Token", async () => {
       await expect(
         hre.f.SC.gateKeeper
-          .connect(hre.f.alice)
-          .addToTransferBlacklist([hre.f.alice.address])
+          .connect(alice)
+          .addToTransferBlacklist([alice.address])
       ).to.be.revertedWithCustomError(hre.f.SC.gateKeeper, "OnlyController");
     });
 
     it("Only controller can blacklist users for transferring Repository Token", async () => {
       await hre.f.SC.gateKeeper
         .connect(hre.f.deployer)
-        .addToTransferBlacklist([hre.f.alice.address]);
+        .addToTransferBlacklist([alice.address]);
 
       expect(
         await hre.f.SC.gateKeeper.canTransferRepositoryToken(
-          hre.f.alice.address
+          alice.address
         )
       ).to.be.eq(false);
 
-      await expect(hre.f.SC.repositoryContracts[0].repositoryToken.connect(hre.f.alice).
+      await expect(hre.f.SC.repositoryContracts[0].repositoryToken.connect(alice).
         transfer(hre.f.signers[10].address, 1)).to.be.revertedWith("Blacklisted")
     });
 
     it("Repository can remove from queuedWithdrawal even if recipient is blacklisted", async () => {
 
-      const amount6 = ethers.parseUnits("1000", 6);
-      const amount18 = ethers.parseUnits("1000", 18);
-      await hre.f.SC.MockUSDC.connect(hre.f.SC.deployer).mint(
-        await hre.f.alice.getAddress(), amount6);
-      await hre.f.SC.MockUSDC.connect(hre.f.alice).approve(
-        hre.f.SC.repositoryContracts[0].repository.getAddress(),amount6);
-      await hre.f.SC.repositoryContracts[0].repository.connect(hre.f.alice).initiateDeposit(amount6, 0);
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .processDeposits(2);
+      const amount6 = toBN("1000", 6);
+      const amount18 = toBN("1000");
+      await approveAndDeposit(alice, amount6, true, 'USDC');
 
-      let aliceRepositoryTokenBalance=await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(hre.f.alice.address)
+      let aliceRepositoryTokenBalance=await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(alice.address)
       expect(aliceRepositoryTokenBalance).to.be.closeTo(amount18,toBN("1"))
 
       await hre.f.SC.repositoryContracts[0].repository
-      .connect(hre.f.SC.userAccount)
+      .connect(bob)
       .initiateWithdraw(amount18, 0);
 
       await hre.f.SC.repositoryContracts[0].repository
-      .connect(hre.f.alice)
+      .connect(alice)
       .initiateWithdraw(amount18, 0);
      
-      aliceRepositoryTokenBalance=await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(hre.f.alice.address)
+      aliceRepositoryTokenBalance=await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(alice.address)
  
       expect(aliceRepositoryTokenBalance).to.be.closeTo(0,toBN("1"))
 
@@ -170,16 +192,16 @@ describe("WhitelistGateKeeper - Testing", () => {
       const nextQueuedWithdraw =
         await hre.f.SC.repositoryContracts[0].repository.withdrawQueue(0);
       expect(nextQueuedWithdraw[1]).to.be.eq(
-        await hre.f.SC.userAccount.getAddress()
+        await bob.getAddress()
       );
 
       await hre.f.SC.gateKeeper
         .connect(hre.f.deployer)
-        .addToTransferBlacklist([hre.f.alice.address]);
+        .addToTransferBlacklist([alice.address]);
       
       expect(
         await hre.f.SC.gateKeeper.canTransferRepositoryToken(
-          hre.f.alice.address
+          alice.address
         )
       ).to.be.eq(false);
 
@@ -196,54 +218,40 @@ describe("WhitelistGateKeeper - Testing", () => {
     it("Non controller can't unblacklist users for transferring Repository Token", async () => {
       await expect(
         hre.f.SC.gateKeeper
-          .connect(hre.f.alice)
-          .removeFromTransferBlacklist([hre.f.alice.address])
+          .connect(alice)
+          .removeFromTransferBlacklist([alice.address])
       ).to.be.revertedWithCustomError(hre.f.SC.gateKeeper, "OnlyController");
     });
 
     it("Only controller can unblacklist users for transferring Repository Token", async () => {
       await hre.f.SC.gateKeeper
         .connect(hre.f.deployer)
-        .removeFromTransferBlacklist([hre.f.alice.address]);
+        .removeFromTransferBlacklist([alice.address]);
 
       expect(
         await hre.f.SC.gateKeeper.canTransferRepositoryToken(
-          hre.f.alice.address
+          alice.address
         )
       ).to.be.eq(true);
     });
 
     it("owner transfer", async function () {
-      const amount = ethers.parseUnits("100", 6);
-      await hre.f.SC.MockUSDC.connect(hre.f.SC.deployer).mint(
-        await hre.f.alice.getAddress(), amount);
-      await hre.f.SC.MockUSDC.connect(
-        hre.f.alice
-      ).approve(
-        hre.f.SC.repositoryContracts[0].repository.getAddress(),
-        amount
-      );
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.alice)
-        .initiateDeposit(amount, 0);
+      const amount = toBN("100", 6);
+      await approveAndDeposit(alice, amount, true, 'USDC');
 
       const tokenValue =
         await hre.f.SC.repositoryContracts[0].repository.getNAV();
       expect(tokenValue).eq(toBN("1"));
 
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .processDeposits(1);
-
       const estimateValue = (toBN("100") / tokenValue) * toBN("1"); // loosing precision doing decimal division on the NAV and the scaled value.
 
       expect(
         await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          hre.f.alice.address
+          alice.address
         )
       ).to.be.closeTo(estimateValue, toBN("1"));
 
-      await hre.f.SC.repositoryContracts[0].repositoryToken.connect(hre.f.alice).
+      await hre.f.SC.repositoryContracts[0].repositoryToken.connect(alice).
         transfer(hre.f.signers[10].address, 1)
 
       expect(

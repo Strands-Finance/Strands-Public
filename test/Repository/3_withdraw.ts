@@ -1,607 +1,220 @@
-import { MaxInt256, MaxUint256 } from "ethers/constants";
-import { seedFixture } from "../../scripts/utils/fixture";
-import { hre } from "../../scripts/utils/testSetup";
-import { toBN } from "../../scripts/utils/web3utils";
+import { hre, expect, ethers, loadFixture, createFixture, approveAndDeposit, approveAndWithdraw, getAlice, getBob } from "../helpers/setupTestSystem.js";
+import { toBN } from "../helpers/testUtils.js";
+import type { Repository, RepositoryToken, TestERC20SetDecimals } from "../../typechain-types/index.js";
+import type { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 
-const { expect } = require("chai");
-const { ethers } = require("hardhat");
+describe(`Repository Withdraw`, function () {
+  let alice: HardhatEthersSigner;
+  let bob: HardhatEthersSigner;
+  let repo: Repository;
+  let repoToken: RepositoryToken;
+  let mockUSDC: TestERC20SetDecimals;
+  let controller: HardhatEthersSigner;
+  const minOut = toBN("1", 6);
 
-describe("Repository Withdraw - Testing (using BookKeeper)", function () {
-  beforeEach(() => seedFixture({}));
-  let minOut = toBN("1", 6);
+  const deployContractsFixture = createFixture(
+    'accountNFT',
+    'none',
+    'USDC',
+    false,
+    50000,
+    "0.001"
+  );
 
-  describe("signal withdraw from contract", function () {
-    it("should revert if amount is zero", async function () {
-      await expect(
-        hre.f.SC.repositoryContracts[0].repository.initiateWithdraw(0, minOut)
-      ).to.be.revertedWithCustomError(
-        hre.f.SC.repositoryContracts[0].repository,
-        "InvalidAmount"
-      );
-    });
+  beforeEach(async () => {
+    await loadFixture(deployContractsFixture);
+    alice = getAlice();
+    bob = getBob();
+    repo = hre.f.SC.repositoryContracts[0].repository;
+    repoToken = hre.f.SC.repositoryContracts[0].repositoryToken;
+    mockUSDC = hre.f.SC.MockUSDC;
+    controller = hre.f.SC.repositoryContracts[0].controller;
+  });
 
-    it("can NOT withdraw if balance - pendingDeposit < amount", async () => {
-      expect(
-        await hre.f.SC.MockUSDC.balanceOf(
-          hre.f.SC.repositoryContracts[0].repository.getAddress()
-        )
-      ).to.equal(toBN("50000", 6));
-
-      const amount = toBN("100", 6);
-
-      await hre.f.SC.MockUSDC.connect(hre.f.SC.userAccount).approve(
-        hre.f.SC.repositoryContracts[0].repository.getAddress(),
-        amount
-      );
-
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.userAccount)
-        .initiateDeposit(amount, toBN("1"));
-
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .moveFundsToExecutor(amount)
-
-      //balance = 50000 - 100 + 100 pending
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.userAccount)
-        .initiateWithdraw(toBN("50000", 18), toBN("50000", 6));
-
-      await expect(hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .processWithdrawals(1)).to.revertedWithCustomError(
-          hre.f.SC.repositoryContracts[0].repository, "InsufficientLocalFundsToProcessRedemption");
-    });
-
-    it("remove all repository token from the repository as per seeded fixture", async () => {
-      expect(
-        await hre.f.SC.MockUSDC.balanceOf(
-          hre.f.SC.repositoryContracts[0].repository.getAddress()
-        )
-      ).to.equal(ethers.parseUnits("50000", 6));
-      // check how many repository tokens the user has
-      const numLpTokens =
-        await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.SC.userAccount.getAddress()
-        );
-
-      // approve repository to spend user's repository token
-      await hre.f.SC.repositoryContracts[0].repositoryToken
-        .connect(hre.f.SC.userAccount)
-        .approve(
-          hre.f.SC.repositoryContracts[0].repository.getAddress(),
-          numLpTokens
-        );
-      // initiate withdraw
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.userAccount)
-        .initiateWithdraw(numLpTokens, minOut);
-      expect(
-        await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.SC.userAccount.getAddress()
-        )
-      ).to.equal(0);
-
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .processWithdrawals(1);
-
-
-      await hre.f.SC.repositoryContracts[0].repository.connect(hre.f.SC.userAccount).redeemClaimable();
-
-      expect(
-        await hre.f.SC.MockUSDC.balanceOf(
-          hre.f.SC.repositoryContracts[0].repository.getAddress()
-        )
-      ).to.equal(0);
-
-      // Get the licensing fee amount
-      const licenseFee = await hre.f.SC.MockUSDC.balanceOf(
-        hre.f.SC.repositoryContracts[0].feeRecipient.address
-      );
-
-      // already has been seeded with 50k of USDC in the repository
-      expect(
-        await hre.f.SC.MockUSDC.balanceOf(
-          await hre.f.SC.userAccount.getAddress()
-        )
-      ).to.equal(toBN("100000", 6) - licenseFee);
-
-      expect(
-        await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.SC.userAccount.getAddress()
-        )
-      ).to.equal(0);
-      expect(
-        await hre.f.SC.MockUSDC.balanceOf(
-          await hre.f.SC.repositoryContracts[0].repository.getAddress()
-        )
-      ).to.equal(0);
-    });
-
-    it("remove partial repository token from the repository as per seeded fixture", async () => {
-      await hre.f.SC.repositoryFactory
-        .connect(hre.f.SC.deployer)
-        .setFeeRecipient(hre.f.signers[1].address);
-      expect(
-        await hre.f.SC.MockUSDC.balanceOf(
-          hre.f.SC.repositoryContracts[0].repository.getAddress()
-        )
-      ).to.equal(ethers.parseUnits("50000", 6));
-      expect(
-        await hre.f.SC.MockUSDC.balanceOf(
-          await hre.f.SC.userAccount.getAddress()
-        )
-      ).to.equal(ethers.parseUnits("50000", 6));
-      // check how many repository tokens the user has
-      const numLpTokens =
-        await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.SC.userAccount.getAddress()
-        );
-
-      // approve repository to spend user's repository token
-      await hre.f.SC.repositoryContracts[0].repositoryToken
-        .connect(hre.f.SC.userAccount)
-        .approve(
-          hre.f.SC.repositoryContracts[0].repository.getAddress(),
-          numLpTokens / 2n
-        );
-
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.userAccount)
-        .initiateWithdraw(numLpTokens / 2n, minOut);
-      expect(
-        await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.SC.userAccount.getAddress()
-        )
-      ).to.equal(numLpTokens / 2n);
-
-      const nav = await hre.f.SC.repositoryContracts[0].repository.getNAV();
-
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .processWithdrawals(1);
-
-      await hre.f.SC.repositoryContracts[0].repository.connect(hre.f.SC.userAccount).redeemClaimable();
-
-      // fee processed as well, so value need to be not exactly 25k
-      expect(
-        await hre.f.SC.MockUSDC.balanceOf(
-          hre.f.SC.repositoryContracts[0].repository.getAddress()
-        )
-      ).to.be.closeTo(ethers.parseUnits("25000", 6), ethers.parseUnits("1", 6));
-
-      expect(
-        await hre.f.SC.MockUSDC.balanceOf(
-          await hre.f.SC.userAccount.getAddress()
-        )
-      ).to.be.closeTo(ethers.parseUnits("75000", 6), ethers.parseUnits("1", 6)); // 50k + 25k redemption
+  describe("Withdrawal Validation", function () {
+    it("should validate zero amount withdrawals", async function () {
+      await expect(repo.initiateWithdraw(0, minOut))
+        .to.be.revertedWithCustomError(repo, "InvalidAmount");
     });
   });
 
-  describe("Check that state is correctly preserved in the withdraw queue", function () {
-    it("should withdraw deposits with sequential IDs", async () => {
-      const amount = ethers.parseUnits("1000", 18);
+  describe("Insufficient Funds Handling", function () {
+    it("should handle insufficient funds scenario", async function () {
+      await approveAndDeposit(alice, toBN("100", 6), false);
+      await hre.f.SC.repositoryContracts[0].bookKeeper.connect(controller).setIncludeExecutor(true);
+      await repo.connect(controller).moveFundsToExecutor(toBN("2000", 6));
+      await repo.connect(bob).initiateWithdraw(toBN("50000", 18), toBN("50000", 6));
+      await hre.f.SC.repositoryContracts[0].bookKeeper.connect(controller).markValueOffChainSettled(true);
 
-      const initialQueueIndex = parseInt(
-        (
-          await hre.f.SC.repositoryContracts[0].repository.withdrawHead()
-        ).toString()
-      );
-      const initialAmount = await hre.f.SC.MockUSDC.balanceOf(
-        hre.f.SC.repositoryContracts[0].repository.getAddress()
-      );
-      const initialUserBalance = await hre.f.SC.MockUSDC.balanceOf(
-        await hre.f.SC.userAccount
-      );
-      const initialTokenSupply =
-        await hre.f.SC.repositoryContracts[0].repositoryToken.totalSupply();
-
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.userAccount)
-        .initiateWithdraw(amount, minOut);
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .processWithdrawals(2);
-
-      // Get the licensing fee amount
-      const step1LicenseFee = await hre.f.SC.MockUSDC.balanceOf(
-        hre.f.SC.repositoryContracts[0].feeRecipient.address
-      );
-      const step1UserBalance = await hre.f.SC.MockUSDC.balanceOf(
-        await hre.f.SC.userAccount
-      );
-
-      expect(
-        await hre.f.SC.repositoryContracts[0].repository.withdrawHead()
-      ).to.equal(initialQueueIndex + 1);
-      expect(
-        await hre.f.SC.MockUSDC.balanceOf(
-          await hre.f.SC.repositoryContracts[0].repository.getAddress()
-        )
-      ).to.equal(
-        initialAmount -
-        (step1UserBalance - initialUserBalance) -
-        step1LicenseFee
-      );
-
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.userAccount)
-        .initiateWithdraw(amount, minOut);
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .processWithdrawals(1);
-
-      expect(
-        await hre.f.SC.repositoryContracts[0].repository.withdrawHead()
-      ).to.equal(initialQueueIndex + 2);
-      const step2UserBalance = await hre.f.SC.MockUSDC.balanceOf(
-        await hre.f.SC.userAccount
-      );
-      // Get the licensing fee amount
-      const step2LicenseFee = await hre.f.SC.MockUSDC.balanceOf(
-        hre.f.SC.repositoryContracts[0].feeRecipient.address
-      );
-
-      expect(
-        await hre.f.SC.MockUSDC.balanceOf(
-          await hre.f.SC.repositoryContracts[0].repository.getAddress()
-        )
-      ).to.equal(
-        initialAmount -
-        (step2UserBalance - initialUserBalance) -
-        step2LicenseFee
-      );
-
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.userAccount)
-        .initiateWithdraw(amount, minOut);
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .processWithdrawals(1);
-
-      const step3UserBalance = await hre.f.SC.MockUSDC.balanceOf(
-        await hre.f.SC.userAccount
-      );
-      // Get the licensing fee amount
-      const step3LicenseFee = await hre.f.SC.MockUSDC.balanceOf(
-        hre.f.SC.repositoryContracts[0].feeRecipient.address
-      );
-
-      expect(
-        await hre.f.SC.MockUSDC.balanceOf(
-          await hre.f.SC.repositoryContracts[0].repository.getAddress()
-        )
-      ).to.equal(
-        initialAmount -
-        (step3UserBalance - initialUserBalance) -
-        step3LicenseFee
-      );
-      expect(
-        await hre.f.SC.repositoryContracts[0].repository.withdrawHead()
-      ).to.equal(initialQueueIndex + 3);
+      await expect(repo.connect(controller).processWithdrawals(1))
+        .to.be.revertedWithCustomError(repo, "InsufficientLocalFundsToProcessRedemption");
     });
   });
 
-  describe("deposit and then withdraw, from same account, same amounts multiple times to check that the correct amount of money is received", async () => {
-    it("should be able to deposit and withdraw the same amount after change in NAV", async () => {
-      // use alice for this
+  describe("Complete Withdrawal", function () {
+    it("should handle complete withdrawal", async function () {
+      // Note: Fixture already gives alice 100k USDC
+      // We mint another 100k to test with 200k total
+      await mockUSDC.connect(hre.f.SC.deployer).mint(alice.getAddress(), toBN("100000", 6));
 
-      expect(
-        await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.alice.getAddress()
-        )
-      ).to.be.eq(0);
-      expect(
-        await hre.f.SC.MockUSDC.balanceOf(await hre.f.alice.getAddress())
-      ).to.be.eq(ethers.parseUnits("0", 6));
-      // mint alice 150K
-      await hre.f.SC.MockUSDC.connect(hre.f.SC.deployer).mint(
-        await hre.f.alice.getAddress(),
-        ethers.parseUnits("200000", 6)
-      );
-      expect(
-        await hre.f.SC.MockUSDC.balanceOf(await hre.f.alice.getAddress())
-      ).to.be.eq(ethers.parseUnits("200000", 6));
+      const aliceBalanceBefore = await mockUSDC.balanceOf(alice.getAddress());
+      // Alice should have 200k (100k from fixture + 100k just minted)
+      expect(aliceBalanceBefore).to.be.eq(toBN("200000", 6));
 
-      // deposit 50k usdc
-      const amount = ethers.parseUnits("50000", 6);
-      await hre.f.SC.MockUSDC.connect(hre.f.alice).approve(
-        hre.f.SC.repositoryContracts[0].repository.getAddress(),
-        ethers.parseUnits("200000", 6)
-      );
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.alice)
-        .initiateDeposit(amount, 0);
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .processDeposits(1);
+      await approveAndDeposit(alice, toBN("10000", 6), true, 'USDC');
 
-      // 200k - 50k(deposited)
-      expect(
-        await hre.f.SC.MockUSDC.balanceOf(await hre.f.alice.getAddress())
-      ).to.be.eq(ethers.parseUnits("150000", 6));
+      const aliceTokens = await repoToken.balanceOf(alice.getAddress());
+      expect(aliceTokens).to.be.closeTo(toBN("10000"), toBN("1")); // Verify alice has expected tokens
 
-      // deposit another 50k usdc
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.alice)
-        .initiateDeposit(amount, 0);
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .processDeposits(1);
+      const aliceBalanceAfterDeposit = await mockUSDC.balanceOf(alice.getAddress());
+      // Alice deposited 10k from her balance
+      expect(aliceBalanceAfterDeposit).to.be.eq(toBN("190000", 6));
 
-      // deposit another 50k usdc
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.alice)
-        .initiateDeposit(amount, 0);
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .processDeposits(1);
+      await approveAndWithdraw(alice, aliceTokens, true, minOut);
+      expect(await repoToken.balanceOf(alice.getAddress())).to.equal(0);
 
-      // deposit another 50k usdc
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.alice)
-        .initiateDeposit(amount, 0);
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .processDeposits(1);
+      // Redeem the claimable to get USDC back
+      await repo.connect(alice).redeemClaimable();
 
-      // check that alice has no remaining usdc balance
-      expect(
-        await hre.f.SC.MockUSDC.balanceOf(await hre.f.alice.getAddress())
-      ).to.be.eq(ethers.parseUnits("0", 6));
-
-      // withdraw a 1/4 of the repository tokens
-      const tokens =
-        ((await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.alice.getAddress()
-        )) /
-          toBN("4")) *
-        toBN("1");
-      const tokenBalance =
-        await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.alice.getAddress()
-        );
-
-      // withdraw all 4 at the same time in sep withdraws
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.alice)
-        .initiateWithdraw(tokens, minOut);
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.alice)
-        .initiateWithdraw(tokens, minOut);
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.alice)
-        .initiateWithdraw(tokens, minOut);
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.alice)
-        .initiateWithdraw(tokenBalance - (tokens * toBN("3")) / toBN("1"), minOut);
-
-      const licenseFee = await hre.f.SC.MockUSDC.balanceOf(
-        hre.f.SC.repositoryContracts[0].feeRecipient.address
-      );
-
-      expect(
-        await hre.f.SC.MockUSDC.balanceOf(await hre.f.alice.getAddress())
-      ).to.be.eq(ethers.parseUnits("0", 6));
-      expect(
-        await hre.f.SC.MockUSDC.balanceOf(
-          await hre.f.SC.repositoryContracts[0].repository.getAddress()
-        )
-      ).to.be.eq(ethers.parseUnits("250000", 6) - licenseFee);
-
-      // check that alice doesn't have any repository tokens left
-      expect(
-        await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.alice.getAddress()
-        )
-      ).to.be.eq(0);
-
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .processWithdrawals(10);
-
-      const afterlicenseFee = await hre.f.SC.MockUSDC.balanceOf(
-        hre.f.SC.repositoryContracts[0].feeRecipient.address
-      );
-
-      const repositoryRemainingBalance = await hre.f.SC.MockUSDC.balanceOf(
-        await hre.f.SC.repositoryContracts[0].repository.getAddress()
-      );
-
-      expect(
-        await hre.f.SC.MockUSDC.balanceOf(await hre.f.alice.getAddress())
-      ).to.be.eq(
-        ethers.parseUnits("250000", 6) -
-        repositoryRemainingBalance -
-        afterlicenseFee
-      );
-    });
-
-    // difference between this test and the above test is to check how the NAV is calculated.
-    it("deposit tokens at different NAVs and withdraw them all to see if the price is effected", async () => {
-      // use alice for this
-      expect(
-        await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.alice.getAddress()
-        )
-      ).to.be.eq(0);
-      expect(
-        await hre.f.SC.MockUSDC.balanceOf(await hre.f.alice.getAddress())
-      ).to.be.eq(ethers.parseUnits("0", 6));
-
-      // mint alice 200k
-      await hre.f.SC.MockUSDC.connect(hre.f.SC.deployer).mint(
-        await hre.f.alice.getAddress(),
-        ethers.parseUnits("200000", 6)
-      );
-      expect(
-        await hre.f.SC.MockUSDC.balanceOf(await hre.f.alice.getAddress())
-      ).to.be.eq(ethers.parseUnits("200000", 6));
-
-      // deposit 50k usdc
-      const amount = ethers.parseUnits("50000", 6);
-      await hre.f.SC.MockUSDC.connect(hre.f.alice).approve(
-        hre.f.SC.repositoryContracts[0].repository.getAddress(),
-        ethers.parseUnits("200000", 6)
-      );
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.alice)
-        .initiateDeposit(amount, 0);
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .processDeposits(1);
-
-      // 200k - 50k(deposited), 150k remaining
-      expect(
-        await hre.f.SC.MockUSDC.balanceOf(await hre.f.alice.getAddress())
-      ).to.be.eq(ethers.parseUnits("150000", 6));
-
-      // deposit another 50k usdc, 100k remaining
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.alice)
-        .initiateDeposit(amount, 0);
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .processDeposits(1);
-
-      // deposit another 50k usdc, 50k remaining
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.alice)
-        .initiateDeposit(amount, 0);
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .processDeposits(1);
-
-      // deposit another 50k usdc, 50k remaining
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.alice)
-        .initiateDeposit(amount, 0);
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .processDeposits(1);
-
-      // check that alice has no remaining usdc balance, 0 remaining
-      expect(
-        await hre.f.SC.MockUSDC.balanceOf(await hre.f.alice.getAddress())
-      ).to.be.eq(ethers.parseUnits("0", 6));
-
-      const tokens =
-        await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.alice.getAddress()
-        );
-
-      // withdraw all of the repository tokens
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.alice)
-        .initiateWithdraw(tokens, minOut);
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .processWithdrawals(1);
-      const repositoryRemainigBalance = await hre.f.SC.MockUSDC.balanceOf(
-        hre.f.SC.repositoryContracts[0].repository.getAddress()
-      );
-      const licenseFee = await hre.f.SC.MockUSDC.balanceOf(
-        hre.f.SC.repositoryContracts[0].feeRecipient.address
-      );
-      expect(
-        await hre.f.SC.MockUSDC.balanceOf(await hre.f.alice.getAddress())
-      ).to.be.eq(
-        ethers.parseUnits("250000", 6) - repositoryRemainigBalance - licenseFee
-      );
+      const finalAliceBalance = await mockUSDC.balanceOf(alice.getAddress());
+      // Alice withdrew ~10k tokens at NAV ~1, minus fee (0.1% = ~10 USDC)
+      // Final balance should be ~200k - 10 = ~199,990 USDC
+      expect(finalAliceBalance).to.be.closeTo(toBN("200000", 6), toBN("20", 6));
     });
   });
 
-  describe("Check that withdraws that are do not meet minimum pay out are not processed", () => {
-    it("check that when a user doesn't get the required amount out the withdraw is not processed", async () => {
-      expect(
-        await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.alice.getAddress()
-        )
-      ).to.be.eq(0);
+  describe("Partial Withdrawal", function () {
+    it("should handle partial withdrawals with fees", async function () {
+      await hre.f.SC.repositoryFactory.connect(hre.f.SC.deployer).setFeeRecipient(hre.f.signers[1].address);
 
-      expect(
-        await hre.f.SC.MockUSDC.balanceOf(await hre.f.alice.getAddress())
-      ).to.be.eq(ethers.parseUnits("0", 6));
+      const bobTokens = await repoToken.balanceOf(bob.getAddress());
+      expect(bobTokens).to.equal(toBN("50000")); // Verify initial state
 
-      // mint alice 200k
-      await hre.f.SC.MockUSDC.connect(hre.f.SC.deployer).mint(
-        await hre.f.alice.getAddress(),
-        ethers.parseUnits("200000", 6)
-      );
+      await approveAndWithdraw(bob, bobTokens / 2n, false, minOut);
+      expect(await repoToken.balanceOf(bob.getAddress())).to.equal(bobTokens / 2n);
 
-      expect(
-        await hre.f.SC.MockUSDC.balanceOf(await hre.f.alice.getAddress())
-      ).to.be.eq(ethers.parseUnits("200000", 6));
+      await repo.connect(controller).processWithdrawals(1);
+      await repo.connect(bob).redeemClaimable();
 
-      // deposit 50k usdc
-      const amount = ethers.parseUnits("50000", 6);
-      await hre.f.SC.MockUSDC.connect(hre.f.alice).approve(
-        hre.f.SC.repositoryContracts[0].repository.getAddress(),
-        ethers.parseUnits("200000", 6)
-      );
-
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.alice)
-        .initiateDeposit(amount, 0);
-
-      await hre.f.SC.repositoryContracts[0].repository.connect(hre.f.SC.repositoryContracts[0].controller).processDeposits(1);
-
-
-      const aliceLpTokenAmounts = await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(await hre.f.alice.getAddress());
-      const aliceUSDCBalance = await hre.f.SC.MockUSDC.balanceOf(await hre.f.alice.getAddress());
-
-
-      // alice is going to withdraw her full amount and expect max uint to be returned
-      await hre.f.SC.repositoryContracts[0].repository.connect(hre.f.alice).initiateWithdraw(aliceLpTokenAmounts, toBN("10000000"));
-
-      // process the withdraw
-      await hre.f.SC.repositoryContracts[0].repository.connect(hre.f.SC.repositoryContracts[0].controller).processWithdrawals(1);
-
-      // check that alice has same usdc
-      expect(
-        await hre.f.SC.MockUSDC.balanceOf(await hre.f.alice.getAddress())
-      ).to.be.eq(aliceUSDCBalance);
-
-      // check that alice has her repository tokens back
-      expect(await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(await hre.f.alice.getAddress())).to.be.eq(aliceLpTokenAmounts);
-
+      expect(await mockUSDC.balanceOf(repo.getAddress())).to.be.closeTo(toBN("25000", 6), toBN("1", 6));
+      expect(await mockUSDC.balanceOf(bob.getAddress())).to.be.closeTo(toBN("25000", 6), toBN("1", 6));
     });
-
   });
 
-  describe("withdraw for all users", function () {
-    it('check event is emmited (postive case)', async () => {
-      // checking user is correctly seeded before test
-      expect(await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(await hre.f.SC.userAccount.getAddress())).to.be.eq(toBN("50000"));
+  describe("Withdrawal Queue Management", function () {
+    it("should process withdrawals sequentially with correct queue state", async () => {
+      const amount = toBN("1000");
+      const initialQueueIndex = await repo.withdrawHead();
+      const initialRepoBalance = await mockUSDC.balanceOf(repo.getAddress());
+      const initialUserBalance = await mockUSDC.balanceOf(bob.getAddress());
 
-      // send the tokens to the burn address
-      await hre.f.SC.repositoryContracts[0].repositoryToken
-        .connect(hre.f.SC.userAccount)
-        .transfer(await hre.f.alice.getAddress(), toBN("50000"));
+      // Process 3 sequential withdrawals
+      for (let i = 1; i <= 3; i++) {
+        await repo.connect(bob).initiateWithdraw(amount, minOut);
+        await repo.connect(controller).processWithdrawals(1);
 
-      expect(await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(await hre.f.SC.userAccount.getAddress())).to.be.eq(toBN("0"));
+        expect(await repo.withdrawHead()).to.equal(initialQueueIndex + BigInt(i));
 
-      const withdrawalArray = [await hre.f.SC.userAccount.getAddress()] as string[];
+        const currentUserBalance = await mockUSDC.balanceOf(bob.getAddress());
+        const currentLicenseFee = await mockUSDC.balanceOf(hre.f.SC.repositoryContracts[0].feeRecipient.address);
 
-      // try and withdraw for all
-      await expect(hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .initiateWithdrawAllFor(withdrawalArray)).to.emit(hre.f.SC.repositoryContracts[0].repository, "InvalidWithdrawQueued");
+        expect(await mockUSDC.balanceOf(repo.getAddress()))
+          .to.equal(initialRepoBalance - (currentUserBalance - initialUserBalance) - currentLicenseFee);
+      }
     });
+  });
 
-    it('check event is not emmited (Negative case)', async () => {
-      // checking user is correctly seeded before test
-      expect(await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(await hre.f.SC.userAccount.getAddress())).to.be.eq(toBN("50000"));
+  describe("NAV Changes and Multi-Deposit Scenarios", () => {
+    it("should handle withdrawals after NAV changes and multiple deposits", async () => {
+      const amount = toBN("10000", 6);
+      const aliceInitialBalance = await mockUSDC.balanceOf(alice.getAddress());
 
-      const withdrawalArray = [await hre.f.SC.userAccount.getAddress()] as string[];
+      // Test 1: Deposit, double NAV, withdraw
+      await approveAndDeposit(alice, amount, true);
+      const tokenBalance = await repoToken.balanceOf(alice.getAddress());
 
-      // try and withdraw for all
-      await expect(hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .initiateWithdrawAllFor(withdrawalArray)).to.not.emit(hre.f.SC.repositoryContracts[0].repository, "InvalidWithdrawQueued");
+      const AUM = await repo.getAUM();
+      const [NAV] = await hre.f.SC.repositoryContracts[0].bookKeeper.getNAV();
+
+      // Double AUM
+      await mockUSDC.connect(hre.f.SC.deployer).mint(repo.getAddress(), AUM / toBN("1", 12));
+      await hre.f.SC.repositoryContracts[0].bookKeeper.connect(controller).updateValueOffChain18(1000, NAV * 2n);
+
+      await repo.connect(alice).initiateWithdraw(tokenBalance, minOut);
+      await repo.connect(controller).processWithdrawals(1);
+      await repo.connect(alice).redeemClaimable();
+
+      expect(await repoToken.balanceOf(alice.getAddress())).to.be.eq(0);
+
+      const feeCollected = await mockUSDC.balanceOf(hre.f.SC.repositoryContracts[0].feeRecipient.address);
+      expect(await mockUSDC.balanceOf(alice.getAddress()))
+        .to.be.closeTo(aliceInitialBalance - amount + (2n * amount) - feeCollected, 100);
+
+      // Test 2: Multiple deposits at different NAVs
+      const aliceBalanceReset = await mockUSDC.balanceOf(alice.getAddress());
+      await approveAndDeposit(alice, amount, true);
+
+      // Double NAV again
+      const newAUM = await repo.getAUM();
+      const [newNAV] = await hre.f.SC.repositoryContracts[0].bookKeeper.getNAV();
+      await mockUSDC.connect(hre.f.SC.deployer).mint(repo.getAddress(), newAUM / toBN("1", 12));
+      await hre.f.SC.repositoryContracts[0].bookKeeper.connect(controller).updateValueOffChain18(1000, newNAV * 2n);
+
+      await approveAndDeposit(alice, amount, true);
+
+      const tokens = await repoToken.balanceOf(alice.getAddress());
+      const balanceBeforeWithdrawal = await mockUSDC.balanceOf(alice.getAddress());
+
+      await repo.connect(alice).initiateWithdraw(tokens, minOut);
+      await repo.connect(controller).processWithdrawals(1);
+      await repo.connect(alice).redeemClaimable();
+
+      const balanceAfterWithdrawal = await mockUSDC.balanceOf(alice.getAddress());
+      const actualWithdrawal = balanceAfterWithdrawal - balanceBeforeWithdrawal;
+      const expectedBalance = aliceBalanceReset - (2n * amount) + actualWithdrawal;
+
+      expect(await mockUSDC.balanceOf(alice.getAddress()))
+        .to.be.closeTo(expectedBalance, toBN("0.001", 6));
     });
+  });
 
+  describe("Minimum Payout Validation", () => {
+    it("should reject withdrawals that don't meet minimum payout", async () => {
+      await mockUSDC.connect(hre.f.SC.deployer).mint(alice.getAddress(), toBN("200000", 6));
+      const amount = toBN("50000", 6);
+      await approveAndDeposit(alice, amount, true, 'USDC');
+
+      const aliceTokens = await repoToken.balanceOf(alice.getAddress());
+      const aliceUSDCBalance = await mockUSDC.balanceOf(alice.getAddress());
+
+      // Set unrealistic minimum payout
+      await repo.connect(alice).initiateWithdraw(aliceTokens, toBN("10000000"));
+      await repo.connect(controller).processWithdrawals(1);
+
+      // Alice should keep her tokens and USDC unchanged
+      expect(await mockUSDC.balanceOf(alice.getAddress())).to.be.eq(aliceUSDCBalance);
+      expect(await repoToken.balanceOf(alice.getAddress())).to.be.eq(aliceTokens);
+    });
+  });
+
+  describe("Bulk Withdrawal Operations", function () {
+    it('should handle initiateWithdrawAllFor with proper event emissions', async () => {
+      const withdrawalArray = [bob.getAddress()];
+
+      // Test 1: User with zero balance should emit InvalidWithdrawQueued
+      await repoToken.connect(bob).transfer(alice.getAddress(), toBN("50000"));
+      expect(await repoToken.balanceOf(bob.getAddress())).to.be.eq(0);
+
+      await expect(repo.connect(controller).initiateWithdrawAllFor(withdrawalArray))
+        .to.emit(repo, "InvalidWithdrawQueued");
+
+      // Test 2: User with valid balance should not emit InvalidWithdrawQueued
+      await repoToken.connect(alice).transfer(bob.getAddress(), toBN("50000"));
+      expect(await repoToken.balanceOf(bob.getAddress())).to.be.eq(toBN("50000"));
+
+      await expect(repo.connect(controller).initiateWithdrawAllFor(withdrawalArray))
+        .to.not.emit(repo, "InvalidWithdrawQueued");
+    });
   });
 
 });

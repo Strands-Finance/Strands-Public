@@ -20,7 +20,7 @@ export const loadContractAddresses = (folderName: string, chainId: string) => {
   try {
     // Load account nft info
     const accountNFTFactoryPath =
-      "./deployments/StrandsAccount/StrandsAccount-deployments.json";
+      "./deployments/NFT/StrandsAccount/StrandsAccount-deployments.json";
     accountNFTData = JSON.parse(
       fs.readFileSync(accountNFTFactoryPath, "utf-8")
     );

@@ -47,14 +47,14 @@ contract FundManager is ERC721, StrandsOwned {
     cumulativeUserBase = _cub;
   }
 
-  function setNAV(uint _nav) public {
+  function setNav(uint _nav) public {
     require(balanceOf(msg.sender) > 0, "NOT AUTHORIZED");
     NAV = _nav;
   }
 
-  function setName(uint _name) public {
+  function setName(string memory _name) public {
     require(balanceOf(msg.sender) > 0, "NOT AUTHORIZED");
-    NAV = _name;
+    name = _name;
   }
 
   function setNumOfShares(uint _shares) public {

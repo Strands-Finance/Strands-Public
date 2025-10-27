@@ -1,198 +1,129 @@
-const { ethers } = require("hardhat");
-import { expect } from "chai";
-import { seedEmptyRepositoryFixture } from "../../scripts/utils/fixture";
-import { hre } from "../../scripts/utils/testSetup";
-import { toBN, fromBN } from "../../scripts/utils/web3utils";
-import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers";
+import { hre, expect, ethers, loadFixture, createFixture, getAlice, getBob, approveAndDeposit } from "../helpers/setupTestSystem.js";
+import { toBN, fromBN } from "../helpers/testUtils.js";
 import {
-  currentTime,
   fastForward,
   restoreSnapshot,
   takeSnapshot,
-} from "../../scripts/utils/evm";
+} from "../helpers/evm.js";
 import { parseUnits } from "ethers";
+import type { Repository, RepositoryToken, TestERC20SetDecimals } from "../../typechain-types/index.js";
+import type { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 
-describe("Repository Deposit - Testing (using SimpleBookKeeper)", function () {
-  before(async () => {
-    await seedEmptyRepositoryFixture({
-      deployNew: true,
-      useSimpleBookKeeper: true
+describe(`SimpleBookKeeper with StrandsAPI`, function () {
+  let alice: HardhatEthersSigner;
+  let bob: HardhatEthersSigner;
+
+  // Contract shortcuts for better readability
+  let repo: Repository;
+  let repoToken: RepositoryToken;
+  let strandsAPI: TestERC20SetDecimals;
+  let controller: HardhatEthersSigner;
+
+  // Cached addresses to avoid repeated async calls
+  let repoAddress: string;
+  let aliceAddress: string;
+  let bobAddress: string;
+
+  const deployContractsFixture = createFixture(
+    'simple',
+    'none',
+    'API',
+    true,
+    0,
+    "0"
+  );
+
+  beforeEach(async () => {
+    await loadFixture(deployContractsFixture);
+
+    // Initialize signers
+    alice = getAlice();
+    bob = getBob();
+
+    // Set up contract shortcuts
+    repo = hre.f.SC.repositoryContracts[0].repository;
+    repoToken = hre.f.SC.repositoryContracts[0].repositoryToken;
+    strandsAPI = hre.f.SC.strandsAPI;
+    controller = hre.f.SC.repositoryContracts[0].controller;
+
+    // Cache frequently used addresses
+    [repoAddress, aliceAddress, bobAddress] = await Promise.all([
+      repo.getAddress(),
+      alice.getAddress(),
+      bob.getAddress()
+    ]);
+
+    // Mint some StrandsAPI tokens to alice for all tests that need them
+    await strandsAPI.connect(controller).mint(aliceAddress, toBN("10000", 6));
+  });
+
+
+  describe("StrandsAPI Token Access Control", function () {
+    it("should enforce access control for minting and burning", async function () {
+      const amount = toBN("10000", 6);
+
+      // Controller mint/burn permissions
+      await expect(strandsAPI.connect(alice).mint(aliceAddress, amount))
+        .to.be.revertedWithCustomError(strandsAPI, "OnlyController");
+      await expect(strandsAPI.connect(alice).burn(amount))
+        .to.be.revertedWithCustomError(strandsAPI, "OnlyController");
+
+      // Controller should succeed
+      await strandsAPI.connect(controller).mint(aliceAddress, amount);
+      expect(await strandsAPI.balanceOf(aliceAddress)).to.be.eq(amount * 2n); // 10k from beforeEach + 10k
+
+      const controllerAddress = await controller.getAddress();
+      await strandsAPI.connect(controller).mint(controllerAddress, amount);
+      await strandsAPI.connect(controller).burn(amount);
+      expect(await strandsAPI.balanceOf(controllerAddress)).to.be.eq(0);
+
+      // Owner burn permissions
+      await expect(strandsAPI.connect(alice).ownerBurn(aliceAddress, amount))
+        .to.be.revertedWithCustomError(strandsAPI, "OnlyOwner");
+
+      await strandsAPI.connect(hre.f.deployer).ownerBurn(aliceAddress, amount);
+      expect(await strandsAPI.balanceOf(aliceAddress)).to.be.eq(amount); // Back to 10k
     });
   });
 
-  describe("testing StrandsAPI", function () {
-    it("non controller can NOT mint", async function () {
-      const amount = ethers.parseUnits("10000", 6);
-      await expect(hre.f.SC.strandsAPI.connect(hre.f.alice).mint(
-        await hre.f.alice.getAddress(), amount)).to.be.
-        revertedWithCustomError(hre.f.SC.strandsAPI, "OnlyController");
-    });
+  describe("Repository Operations with SimpleBookKeeper", function () {
+    it("should handle complete deposit/NAV/withdrawal cycle", async function () {
+      // Initial deposit
+      await approveAndDeposit(alice, toBN("1000", 6), true, 'API');
+      expect(await repoToken.balanceOf(aliceAddress)).to.be.eq(toBN("1000"));
+      expect(await repo.getNAV()).to.be.eq(toBN("1"));
+      expect(await repo.getAUM()).to.be.eq(toBN("1000"));
 
-    it("only controller can mint", async function () {
-      const amount = ethers.parseUnits("10000", 6);
-      await hre.f.SC.strandsAPI.connect(hre.f.SC.repositoryContracts[0].controller).mint(
-        await hre.f.alice.getAddress(), amount);
+      // External value increase
+      await strandsAPI.connect(controller).mint(repoAddress, toBN("250", 6));
+      expect(await repo.getNAV()).to.be.eq(toBN("1.25"));
 
-      expect(await hre.f.SC.strandsAPI.balanceOf(await hre.f.alice.getAddress())).to.be.eq(amount)
-    });
+      // Withdrawal process
+      const withdrawAmount = "500";
+      const minOut = toBN("1", 6);
 
-    it("non controller can NOT burn", async function () {
-      const amount = ethers.parseUnits("10000", 6);
-      expect(await hre.f.SC.strandsAPI.balanceOf(await hre.f.alice.getAddress())).to.be.eq(amount)
-      await expect(hre.f.SC.strandsAPI.connect(hre.f.alice).
-        burn(amount)).to.be.revertedWithCustomError(hre.f.SC.strandsAPI, "OnlyController");
-    });
+      await repo.connect(alice).initiateWithdraw(toBN(withdrawAmount), minOut);
+      await repo.connect(controller).processWithdrawals(1);
+      await repo.connect(alice).redeemClaimable();
 
-    it("only controller can burn", async function () {
-      const amount = ethers.parseUnits("10000", 6);
-      await hre.f.SC.strandsAPI.connect(hre.f.SC.repositoryContracts[0].controller).mint(
-        hre.f.SC.repositoryContracts[0].controller.getAddress(), amount);
-      expect(await hre.f.SC.strandsAPI.balanceOf(hre.f.SC.repositoryContracts[0].controller.getAddress())).to.be.eq(amount)
-      await hre.f.SC.strandsAPI.connect(hre.f.SC.repositoryContracts[0].controller).burn(amount);
-      expect(await hre.f.SC.strandsAPI.balanceOf(await hre.f.deployer.getAddress())).to.be.eq(0)
-    });
-
-    it("non owner can NOT ownerBurn", async function () {
-      const amount = ethers.parseUnits("10000", 6);
-      expect(await hre.f.SC.strandsAPI.balanceOf(await hre.f.alice.getAddress())).to.be.eq(amount)
-      await expect(hre.f.SC.strandsAPI.connect(hre.f.alice).
-        ownerBurn(await hre.f.alice.getAddress(), amount)).to.be.
-        revertedWithCustomError(hre.f.SC.strandsAPI, "OnlyOwner");
-    });
-
-    it("only owner can ownerBurn", async function () {
-      const amount = ethers.parseUnits("10000", 6);
-      expect(await hre.f.SC.strandsAPI.balanceOf(await hre.f.alice.getAddress())).to.be.eq(amount)
-      await hre.f.SC.strandsAPI.connect(hre.f.deployer).ownerBurn(await hre.f.alice.getAddress(), amount);
-      expect(await hre.f.SC.strandsAPI.balanceOf(await hre.f.alice.getAddress())).to.be.eq(0)
+      // Verify final state
+      expect(await repo.getAUM()).to.be.eq(toBN("625"));
+      expect(await repo.getNAV()).to.be.eq(toBN("1.25"));
+      expect(await repoToken.balanceOf(aliceAddress)).to.be.eq(toBN(withdrawAmount));
+      expect(await strandsAPI.balanceOf(aliceAddress)).to.be.eq(toBN("9625", 6)); // 10000 - 1000 + 625
     });
   });
 
-  describe("testing SFP", function () {
-    it("should deposit and mint repository tokens to alice", async function () {
-      await hre.f.SC.strandsAPI.connect(hre.f.SC.repositoryContracts[0].controller).mint(
-        await hre.f.alice.getAddress(), ethers.parseUnits("10000", 6));
+  describe("Deposit Limits", () => {
+    it("should enforce total value cap", async () => {
+      await repo.connect(controller).setTotalValueCap18(toBN("500"));
+      await approveAndDeposit(alice, toBN("300", 6), true, 'API');
 
-      // initiate deposit
-      let amount = "1000"
-      // // approve the repository to manage usdc on your behalf
-      await hre.f.SC.strandsAPI.connect(hre.f.alice).approve(
-        await hre.f.SC.repositoryContracts[0].repository.getAddress(),
-        ethers.parseUnits(amount, 6)
-      );
+      await expect(repo.connect(alice).initiateDeposit(toBN("300", 6), 0))
+        .to.be.revertedWithCustomError(repo, "TotalValueCapReached");
 
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.alice)
-        .initiateDeposit(ethers.parseUnits(amount, 6), toBN("1"));
-
-      // process deposit
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .processDeposits(1);
-
-      expect(
-        await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.alice.getAddress()
-        )
-      ).to.be.eq(toBN(amount));
-
-      expect(
-        await hre.f.SC.repositoryContracts[0].repository.getNAV()
-      ).to.be.eq(toBN("1"));
-
-      expect(
-        await hre.f.SC.repositoryContracts[0].repository.getAUM()
-      ).to.be.eq(toBN(amount));
-    });
-
-    it("correctly calculate NAV after transfer", async () => {
-      let amount = "1000"
-      expect(
-        await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.alice.getAddress()
-        )
-      ).to.be.eq(toBN(amount));
-
-      expect(
-        await hre.f.SC.repositoryContracts[0].repository.getNAV()
-      ).to.be.eq(toBN("1"));
-
-      await hre.f.SC.strandsAPI.connect(hre.f.SC.repositoryContracts[0].controller).mint(
-        await hre.f.SC.repositoryContracts[0].repository.getAddress(), ethers.parseUnits("250", 6));
-
-      await expect(
-        await hre.f.SC.repositoryContracts[0].repository.getNAV()
-      ).to.be.eq(toBN("1.25"));
-    });
-
-    it("should be able to withdraw", async () => {
-      let amount = "500"
-      const minOut = toBN("1", 6); // 1 token of depositAsset
-
-      expect(
-        await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.alice.getAddress()
-        )
-      ).to.be.eq(toBN("1000"));
-
-      expect(
-        await hre.f.SC.repositoryContracts[0].repository.getNAV()
-      ).to.be.eq(toBN("1.25"));
-
-      await hre.f.SC.repositoryContracts[0].repository.connect(hre.f.SC.repositoryContracts[0].controller).
-        setLicensingFeeRate(0)
-
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.alice)
-        .initiateWithdraw(toBN(amount), minOut);
-
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .processWithdrawals(1);
-
-      await hre.f.SC.repositoryContracts[0].repository.connect(hre.f.alice).redeemClaimable();
-
-      //1000+250-500/1.25=625
-      expect(await hre.f.SC.repositoryContracts[0].repository.getAUM()
-      ).to.be.eq(toBN("625"));
-
-      expect(
-        await hre.f.SC.repositoryContracts[0].repository.getNAV()
-      ).to.be.eq(toBN("1.25"));
-
-      //1000-500=500
-      expect(await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-        await hre.f.alice.getAddress())).to.be.eq(toBN(amount));
-
-      //10000-1000+500/1.25=9625
-      expect(
-        await hre.f.SC.strandsAPI.balanceOf(
-          await hre.f.alice.getAddress()
-        )
-      ).to.be.eq(ethers.parseUnits("9625", 6));
-    });
-
-  });
-
-  describe("deposit cap", () => {
-    it(`intiate deposit should fail if capReached`, async () => {
-      const amount = ethers.parseUnits("10000", 18);
-      await hre.f.SC.strandsAPI.connect(hre.f.SC.repositoryContracts[0].controller).mint(
-        await hre.f.alice.getAddress(), amount);
-      await hre.f.SC.strandsAPI.connect(
-        hre.f.alice
-      ).approve(
-        hre.f.SC.repositoryContracts[0].repository.getAddress(),
-        amount
-      );
-      await hre.f.SC.repositoryContracts[0].repository.connect(hre.f.SC.repositoryContracts[0].controller).setTotalValueCap18(toBN("1000"))
-
-      await hre.f.SC.repositoryContracts[0].repository
-      .connect(await hre.f.alice)
-      .initiateDeposit(toBN("300",6),0);
-      await expect(hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.alice).initiateDeposit(toBN("500",6),0)).to.be.
-        revertedWithCustomError(hre.f.SC.repositoryContracts[0].repository, "TotalValueCapReached");
+      // Reset for other tests
+      await repo.connect(controller).setTotalValueCap18(toBN("100000000"));
     });
   });
 });

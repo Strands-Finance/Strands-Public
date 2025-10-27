@@ -1,64 +1,52 @@
-import "@nomiclabs/hardhat-ethers";
-import "@openzeppelin/hardhat-upgrades";
-import "@typechain/hardhat";
-import "@nomicfoundation/hardhat-chai-matchers";
-import { extendEnvironment, HardhatUserConfig, task } from "hardhat/config";
-import "solidity-coverage";
-import "dotenv/config";
+import type { HardhatUserConfig, NetworkUserConfig } from "hardhat/config";
+import hardhatEthers from "@nomicfoundation/hardhat-ethers";
+import hardhatToolboxMochaEthers from "@nomicfoundation/hardhat-toolbox-mocha-ethers";
 import "@nomicfoundation/hardhat-verify";
-import "hardhat-contract-sizer";
+import { config as dotenvConfig } from "dotenv";
+
+dotenvConfig();
 
 const deployerPK = process.env.PRIVATE_KEY as string;
-const ArbitrumApiKey = process.env.ARB_ETHERSCAN_KEY as string;
-const OptimismApiKey = process.env.OP_ETHERSCAN_KEY as string;
-const LyraApiKey = process.env.LYRA_SCAN_API_KEY as string;
-const BaseApiKey = process.env.BASE_ETHERSCAN_KEY as string;
+const alchemyKey = process.env.ALCHEMY_KEY;
+const etherscanApiKey = process.env.ETHERSCAN_KEY || "";
+
+function createNetworkConfig(
+  url: string,
+  options: Partial<NetworkUserConfig> = {}
+): NetworkUserConfig {
+  return {
+    type: "http",
+    url,
+    accounts: [deployerPK],
+    allowUnlimitedContractSize: true,
+    ...options,
+  };
+}
+
+function getAlchemyUrl(alchemyPath: string, fallbackUrl: string): string {
+  return alchemyKey ? `https://${alchemyPath}.g.alchemy.com/v2/${alchemyKey}` : fallbackUrl;
+}
 
 const config: HardhatUserConfig = {
+  plugins: [hardhatEthers, hardhatToolboxMochaEthers],
+  paths: {
+    tests: "./test",
+    cache: "./cache",
+    artifacts: "./artifacts",
+  },
   solidity: {
     compilers: [
       {
         version: "0.8.20",
         settings: {
-          viaIR: true,
-          outputSelection: {
-            "*": {
-              "*": ["storageLayout"],
-            },
-          },
+          viaIR: false,
           optimizer: {
             enabled: true,
-            runs: 20,
+            runs: 200,
           },
-        },
-      },
-      {
-        version: "0.8.16",
-        settings: {
-          viaIR: true,
-          outputSelection: {
-            "*": {
-              "*": ["storageLayout"],
-            },
-          },
-          optimizer: {
-            enabled: true,
-            runs: 20,
-          },
-        },
-      },
-      {
-        version: "0.8.13",
-        settings: {
-          viaIR: true,
-          outputSelection: {
-            "*": {
-              "*": ["storageLayout"],
-            },
-          },
-          optimizer: {
-            enabled: true,
-            runs: 20,
+          evmVersion: "shanghai",
+          debug: {
+            revertStrings: "default",
           },
         },
       },
@@ -66,181 +54,124 @@ const config: HardhatUserConfig = {
   },
   networks: {
     hardhat: {
+      type: "edr-simulated",
+      allowUnlimitedContractSize: true,
+      mining: {
+        auto: true,
+        interval: 0,
+      },
+      allowBlocksWithSameTimestamp: true,
+      accounts: {
+        count: 11,
+      },
+      blockGasLimit: 30_000_000,
+      gasPrice: 0,
+      initialBaseFeePerGas: 0,
     },
     local: {
+      type: "http",
       url: "http://127.0.0.1:8545",
       accounts: {
         mnemonic:
           "test-helpers test-helpers test-helpers test-helpers test-helpers test-helpers test-helpers test-helpers test-helpers test-helpers test-helpers junk",
       },
     },
-    lyra: {
-      url: "https://rpc.lyra.finance/",
-      accounts: [
-        deployerPK == undefined
-          ? "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-          : deployerPK,
-      ],
-    },
-    lyra_testnet: {
-      url: "https://l2-prod-testnet-0eakp60405.t.conduit.xyz/",
-      accounts: [
-        deployerPK == undefined
-          ? "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-          : deployerPK,
-      ],
-    },
-    "mainnet-opti": {
-      url:
-        process.env.OP_ALCHEMY_KEY == undefined ||
-          process.env.OP_ALCHEMY_KEY == ""
-          ? "https://mainnet.optimism.io"
-          : `https://opt-mainnet.g.alchemy.com/v2/${process.env.OP_ALCHEMY_KEY}`,
-      accounts: [
-        deployerPK == undefined
-          ? "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-          : deployerPK,
-      ],
-    },
-    "mainnet-arbi": {
-      url:
-        process.env.ARB_ALCHEMY_KEY == undefined
-          ? "https://arbitrum.llamarpc.com"
-          : `https://arb-mainnet.g.alchemy.com/v2/${process.env.ARB_ALCHEMY_KEY}`,
-      accounts: [
-        deployerPK == undefined
-          ? "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-          : deployerPK,
-      ],
-    },
-    "mainnet-base": {
-      url:
-        process.env.BASE_ALCHEMY_KEY == undefined
-          ? "https://mainnet.base.org"
-          : `https://base-mainnet.g.alchemy.com/v2/${process.env.BASE_ALCHEMY_KEY}`,
-      accounts: [
-        deployerPK == undefined
-          ? "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-          : deployerPK,
-      ],
-    },
-    "sepolia-arbi": {
-      url:
-        process.env.ARB_SEPOLIA_ALCHEMY_KEY == undefined
-          ? "https://sepolia-rollup.arbitrum.io/rpc"
-          : `https://arb-sepolia.g.alchemy.com/v2/${process.env.ARB_SEPOLIA_ALCHEMY_KEY}`,
-      accounts: [
-        deployerPK == undefined
-          ? "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-          : deployerPK,
-      ],
-    },
-    "sepolia-base": {
-      url:
-        process.env.BASE_SEPOLIA_ALCHEMY_KEY == undefined
-          ? "https://sepolia.base.org"
-          : `https://base-sepolia.g.alchemy.com/v2/${process.env.BASE_SEPOLIA_ALCHEMY_KEY}`,
-      accounts: [
-        deployerPK == undefined
-          ? "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-          : deployerPK,
-      ],
-    },
-    "sepolia-opti": {
-      url:
-        process.env.OP_SEPOLIA_ALCHEMY_KEY == undefined
-          ? "https://sepolia.optimism.io/rpc"
-          : `https://opt-sepolia.g.alchemy.com/v2/${process.env.OP_SEPOLIA_ALCHEMY_KEY}`,
-      accounts: [
-        deployerPK == undefined
-          ? "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-          : deployerPK,
-      ],
-      gasPrice: 1000000000,
-    },
-    "sepolia-main": {
-      url:
-        process.env.SEPOLIA_ALCHEMY_KEY == undefined
-          ? "https://ethereum-sepolia-rpc.publicnode.com"
-          : `https://eth-sepolia.g.alchemy.com/v2/${process.env.SEPOLIA_ALCHEMY_KEY}`,
-      accounts: [
-        deployerPK == undefined
-          ? "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-          : deployerPK,
-      ],
+    lyra: createNetworkConfig("https://rpc.lyra.finance/"),
+    lyraTestnet: createNetworkConfig("https://l2-prod-testnet-0eakp60405.t.conduit.xyz/"),
+    optimism: createNetworkConfig(
+      getAlchemyUrl("opt-mainnet", "https://mainnet.optimism.io")
+    ),
+    arbitrumOne: createNetworkConfig(
+      getAlchemyUrl("arb-mainnet", "https://arbitrum.llamarpc.com")
+    ),
+    base: createNetworkConfig(
+      getAlchemyUrl("base-mainnet", "https://mainnet.base.org")
+    ),
+    sepolia: createNetworkConfig(
+      getAlchemyUrl("eth-sepolia", "https://ethereum-sepolia-rpc.publicnode.com")
+    ),
+    arbitrumSepolia: createNetworkConfig(
+      getAlchemyUrl("arb-sepolia", "https://sepolia-rollup.arbitrum.io/rpc")
+    ),
+    optimismSepolia: createNetworkConfig(
+      getAlchemyUrl("opt-sepolia", "https://sepolia.optimism.io/rpc"),
+      { gasPrice: 1000000000 }
+    ),
+    baseSepolia: createNetworkConfig(
+      getAlchemyUrl("base-sepolia", "https://sepolia.base.org")
+    ),
+  },
+  verify: {
+    etherscan: {
+      apiKey: etherscanApiKey,
     },
   },
-  etherscan: {
-    apiKey: {
-      arbitrumOne: ArbitrumApiKey,
-      "sepolia-arbi": ArbitrumApiKey,
-      optimisticEthereum: OptimismApiKey,
-      "sepolia-opti": OptimismApiKey,
-      base: BaseApiKey,
-      "sepolia-base": BaseApiKey,
-      lyra: "abc",
-      lyra_testnet: "abc",
-      "sepolia-main": process.env.L1_ETHERSCAN_KEY || "",
-      sepolia: process.env.L1_ETHERSCAN_KEY || "",
+  chainDescriptors: {
+    11155111: {
+      name: "sepolia",
+      blockExplorers: {
+        etherscan: {
+          name: "Etherscan",
+          url: "https://sepolia.etherscan.io",
+          apiUrl: "https://api.etherscan.io/v2/api",
+        },
+      },
     },
-    customChains: [
-      {
-        network: "sepolia-main",
-        chainId: 11155111,
-        urls: {
-          apiURL: "https://api-sepolia.etherscan.io/api",
-          browserURL: "https://sepolia.etherscan.io",
+    421614: {
+      name: "arbitrumSepolia",
+      blockExplorers: {
+        etherscan: {
+          name: "Etherscan",
+          url: "https://sepolia.arbiscan.io/",
+          apiUrl: "https://api.etherscan.io/v2/api",
         },
       },
-      {
-        network: "sepolia-arbi",
-        chainId: 421614,
-        urls: {
-          apiURL: "https://api-sepolia.arbiscan.io/api",
-          browserURL: "https://sepolia.arbiscan.io/",
+    },
+    11155420: {
+      name: "optimismSepolia",
+      blockExplorers: {
+        etherscan: {
+          name: "Etherscan",
+          url: "https://sepolia-optimism.etherscan.io/",
+          apiUrl: "https://api.etherscan.io/v2/api",
         },
       },
-      {
-        network: "sepolia-opti",
-        chainId: 11155420,
-        urls: {
-          apiURL: "https://api-sepolia-optimism.etherscan.io/api",
-          browserURL: "https://sepolia-optimism.etherscan.io/",
+    },
+    84532: {
+      name: "baseSepolia",
+      blockExplorers: {
+        etherscan: {
+          name: "Etherscan",
+          url: "https://sepolia.basescan.org/",
+          apiUrl: "https://api.etherscan.io/v2/api",
         },
       },
-      {
-        network: "sepolia-base",
-        chainId: 84532,
-        urls: {
-          apiURL: "https://api-sepolia.basescan.org/api",
-          browserURL: "https://sepolia.basescan.org/",
+    },
+    957: {
+      name: "lyra",
+      blockExplorers: {
+        blockscout: {
+          name: "Lyra Explorer",
+          url: "https://explorer.lyra.finance/",
+          apiUrl: "https://explorer.lyra.finance/api/",
         },
       },
-      {
-        network: "lyra",
-        chainId: 957,
-        urls: {
-          apiURL: "https://explorer.lyra.finance/api/",
-          browserURL: "https://explorer.lyra.finance/",
+    },
+    901: {
+      name: "lyraTestnet",
+      blockExplorers: {
+        blockscout: {
+          name: "Lyra Testnet Explorer",
+          url: "https://explorerl2new-prod-testnet-0eakp60405.t.conduit.xyz/",
+          apiUrl: "https://explorerl2new-prod-testnet-0eakp60405.t.conduit.xyz/api/",
         },
       },
-      {
-        network: "lyra_testnet",
-        chainId: 901,
-        urls: {
-          apiURL:
-            "https://explorerl2new-prod-testnet-0eakp60405.t.conduit.xyz/api/",
-          browserURL:
-            "https://explorerl2new-prod-testnet-0eakp60405.t.conduit.xyz/",
-        },
-      },
-    ],
+    },
   },
   mocha: {
-    timeout: 1_000_000,
-  },
-  sourcify: {
-    enabled: false,
+    timeout: 300_000,
+    reporter: "spec",
+    bail: false,
   },
   contractSizer: {
     alphaSort: true,
@@ -248,21 +179,19 @@ const config: HardhatUserConfig = {
     runOnCompile: true,
     strict: true,
     only: [
-      'AccountNFTBookKeeper',
-      'DirectInputBookKeeper',
-      'Repository',
-      'RepositoryFactory',
-      'RepositoryToken',
-      'StrandsAccount',
-      'StrandsPosition'],
+      "AccountNFTBookKeeper",
+      "DirectInputBookKeeper",
+      "Repository",
+      "RepositoryFactory",
+      "RepositoryToken",
+      "StrandsAccount",
+      "StrandsPosition",
+    ],
+  },
+  typechain: {
+    outDir: "typechain-types",
+    target: "ethers-v6",
   },
 };
-
-extendEnvironment((hre) => {
-  (hre as any).f = {
-    SC: undefined,
-    deploySnap: undefined,
-  };
-});
 
 export default config;

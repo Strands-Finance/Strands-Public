@@ -32,21 +32,13 @@ contract StrandsAccount is IStrandsAccount, ERC721, StrandsOwned {
   function tokenURI(
     uint tokenId
   ) public view override(ERC721) returns (string memory) {
-    require(
-      (mintCounter == 0 || tokenId <= mintCounter),
-      "can't get URI for nonexistent token"
-    );
     return tURI;
   }
 
   /**
    * @dev Set token uri of token id
-   * @param tokenId id of nft
    */
-  function setTokenURI(
-    uint tokenId,
-    string memory _tURI
-  ) public onlyController {
+  function setTokenURI(string memory _tURI) public onlyController {
     tURI = _tURI;
   }
 
@@ -61,7 +53,7 @@ contract StrandsAccount is IStrandsAccount, ERC721, StrandsOwned {
   ) external {
     // Check msg.sender is the owner of token id
     address nftOwner = _ownerOf[tokenId_];
-    require(msg.sender == nftOwner, "Not owner of token");
+    if (msg.sender != nftOwner) revert UnauthorizedOwner();
     for (uint i = 0; i < traders_.length; ++i) {
       if (!_isApprovedTrader[tokenId_][traders_[i]]) {
         accountDetails[tokenId_].approvedTraders.push(traders_[i]);
@@ -78,9 +70,9 @@ contract StrandsAccount is IStrandsAccount, ERC721, StrandsOwned {
   function removeApprovedTrader(uint tokenId_, address trader_) external {
     // Check msg.sender is the owner of token id
     address nftOwner = _ownerOf[tokenId_];
-    require(msg.sender == nftOwner, "Not owner of token");
+    if (msg.sender != nftOwner) revert UnauthorizedOwner();
     // Check trader is approved trader
-    require(_isApprovedTrader[tokenId_][trader_], "Not approved trader");
+    if (!_isApprovedTrader[tokenId_][trader_]) revert NotApprovedTrader();
 
     uint length = accountDetails[tokenId_].approvedTraders.length;
     for (uint i = 0; i < length; ++i) {
@@ -109,19 +101,19 @@ contract StrandsAccount is IStrandsAccount, ERC721, StrandsOwned {
     address to,
     string memory clearingFirm_,
     string memory accountNumber_,
-    uint accountValue_,
-    uint initialMargin_,
-    uint maintenanceMargin_,
-    uint excessEquity_,
+    int accountValue_,
+    int initialMargin_,
+    int maintenanceMargin_,
+    int excessEquity_,
     uint timestamp
   ) public onlyController {
     // Check NFT exists with same clearingFirm_ and accountNumber_
     address nftOwner = getOwner(clearingFirm_, accountNumber_);
-    require(nftOwner == address(0), "NFT already exist");
+    if (nftOwner != address(0)) revert AlreadyExists();
     mintCounter += 1;
-    require(timestamp <= block.timestamp, "Timestamp in future");
+    if (timestamp > block.timestamp) revert FutureTimestamp();
     // If we force it to be > 0, we can see if tokenId exists by checking accountDetails[invalidTokenId].timestamp == 0
-    require(timestamp > 0, "Timestamp cant be 0");
+    if (timestamp == 0) revert ZeroValue();
     accountDetails[mintCounter].clearingFirm = clearingFirm_;
     accountDetails[mintCounter].accountNumber = accountNumber_;
     accountDetails[mintCounter].accountValue = accountValue_;
@@ -148,23 +140,17 @@ contract StrandsAccount is IStrandsAccount, ERC721, StrandsOwned {
   function updateValues(
     string memory clearingFirm_,
     string memory accountNumber_,
-    uint accountValue_,
-    uint initialMargin_,
-    uint maintenanceMargin_,
-    uint excessEquity_,
+    int accountValue_,
+    int initialMargin_,
+    int maintenanceMargin_,
+    int excessEquity_,
     uint timestamp
   ) external onlyController {
     uint accountTokenId = accountTree[clearingFirm_][accountNumber_];
     // Check the accountTokenId exist for clearingFirm_ and accountNumber_
-    require(
-      accountTokenId != 0,
-      "NFT doesn't exist with clearingFirm and account number"
-    );
-    require(
-      accountDetails[mintCounter].statementTimestamp < timestamp,
-      "Statement is older than current one"
-    );
-    require(timestamp <= block.timestamp, "Timestamp in future");
+    if (accountTokenId == 0) revert DoesNotExist();
+    if (accountDetails[accountTokenId].statementTimestamp >= timestamp) revert StaleStatement();
+    if (timestamp > block.timestamp) revert FutureTimestamp();
     accountDetails[accountTokenId].accountValue = accountValue_;
     accountDetails[accountTokenId].initialMargin = initialMargin_;
     accountDetails[accountTokenId].maintenanceMargin = maintenanceMargin_;
@@ -208,7 +194,13 @@ contract StrandsAccount is IStrandsAccount, ERC721, StrandsOwned {
     uint accountTokenId_ = accountTree[clearingFirm_][accountNumber_];
     uint256[] memory pids = IStrandsPosition(positionNFT)
       .getPositionIdsByAccount(clearingFirm_, accountNumber_, true);
-    require(pids.length == 0, "Can't delete account with position(s)");
+    if (pids.length != 0) revert AccountHasPositions();
+
+    _updateOwnedTokenIds(
+      _ownerOf[accountTokenId_],
+      address(0),
+      accountTokenId_
+    );
 
     // Delete the account if there's no position
     accountTree[clearingFirm_][accountNumber_] = 0;
@@ -228,8 +220,8 @@ contract StrandsAccount is IStrandsAccount, ERC721, StrandsOwned {
     address to,
     uint256 id
   ) public override onlyController {
-    require(from == _ownerOf[id] && from != address(0), "WRONG_FROM");
-    require(to != address(0), "INVALID_RECIPIENT");
+    if (from != _ownerOf[id] || from == address(0)) revert UnauthorizedOwner();
+    if (to == address(0)) revert ZeroAddress();
 
     unchecked {
       _balanceOf[from]--;
@@ -254,7 +246,7 @@ contract StrandsAccount is IStrandsAccount, ERC721, StrandsOwned {
    * @param positionNFT_ position nft address
    */
   function setPositionNFT(address positionNFT_) external onlyController {
-    require(positionNFT_ != address(0), "Invalid PositionNFT Address");
+    if (positionNFT_ == address(0)) revert ZeroAddress();
     positionNFT = positionNFT_;
   }
 
@@ -271,13 +263,22 @@ contract StrandsAccount is IStrandsAccount, ERC721, StrandsOwned {
     view
     returns (IStrandsPosition.PositionDetails[] memory positionDetails)
   {
-    require(_ownerOf[tokenId_] != address(0), "Invalid account tokenId");
-    return
-      IStrandsPosition(positionNFT).getPositionsByAccount(
-        accountDetails[tokenId_].clearingFirm,
-        accountDetails[tokenId_].accountNumber,
-        includeExpiredPosition_
-      );
+    if (_ownerOf[tokenId_] == address(0)) revert InvalidTokenId();
+
+    // Get position IDs first (gas-efficient)
+    uint[] memory pids = IStrandsPosition(positionNFT).getPositionIdsByAccount(
+      accountDetails[tokenId_].clearingFirm,
+      accountDetails[tokenId_].accountNumber,
+      includeExpiredPosition_
+    );
+
+    // Fetch details for each position
+    IStrandsPosition.PositionDetails[] memory result = new IStrandsPosition.PositionDetails[](pids.length);
+    for (uint i = 0; i < pids.length; i++) {
+      result[i] = IStrandsPosition(positionNFT).getPositionDetails(pids[i]);
+    }
+
+    return result;
   }
 
   /**
@@ -339,7 +340,7 @@ contract StrandsAccount is IStrandsAccount, ERC721, StrandsOwned {
    * @dev Get account value
    * @param accountTokenId_ account token id
    */
-  function getAccountValue(uint accountTokenId_) external view returns (uint) {
+  function getAccountValue(uint accountTokenId_) external view returns (int) {
     return accountDetails[accountTokenId_].accountValue;
   }
 
@@ -371,7 +372,9 @@ contract StrandsAccount is IStrandsAccount, ERC721, StrandsOwned {
         ++i;
       }
     }
-    _ownedAccountIds[to].push(id);
+    if (to != address(0)) {
+      _ownedAccountIds[to].push(id);
+    }
   }
 
   /**

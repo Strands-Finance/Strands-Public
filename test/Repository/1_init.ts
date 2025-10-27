@@ -1,117 +1,145 @@
-import { seedFixture } from "../../scripts/utils/fixture";
-import { hre } from "../../scripts/utils/testSetup";
-import { toBN } from "../../scripts/utils/web3utils";
+import { expect, hre, ethers, loadFixture, createFixture, getAlice, getBob } from "../helpers/setupTestSystem.js";
+import { toBN } from "../helpers/testUtils.js";
+import { getTestConstants } from "../helpers/testConstants.js";
+import type { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 
-const { expect } = require("chai");
-const { ethers } = require("hardhat");
+describe(`Repository Initialization`, function () {
+  let alice: HardhatEthersSigner;
+  let bob: HardhatEthersSigner;
+  let controller: HardhatEthersSigner;
+  let owner: HardhatEthersSigner;
 
-describe("Repository Initialization - Testing (using BookKeeper)", function () {
-  beforeEach(() => seedFixture({}));
+  const deployContractsFixture = createFixture('simple', 'none', 'API', true, 0, "0");
 
-  describe("setBookKeeper", function () {
-    it("should revert if caller is not the owner", async function () {
-      await expect(
-        hre.f.SC.repositoryContracts[0].repository
-          .connect(hre.f.SC.repositoryContracts[0].controller)
-          .setBookKeeper(hre.f.SC.repositoryContracts[0].controller)
-      ).to.be.revertedWithCustomError(
-        hre.f.SC.repositoryContracts[0].repository,
-        "OnlyOwner"
-      );
-    });
+  beforeEach(async () => {
+    await loadFixture(deployContractsFixture);
+    alice = getAlice();
+    bob = getBob();
+    controller = hre.f.SC.repositoryContracts[0].controller;
+    owner = hre.f.SC.repositoryContracts[0].owner;
+  });
 
-    it("should set the bookKeeper", async function () {
-      const newBookKeeper = await ethers.getContractFactory("BookKeeper");
-      const newBookKeeperInstance = await newBookKeeper.deploy(
-        hre.f.SC.deployer.getAddress()
-      );
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].owner)
-        .setBookKeeper(await newBookKeeperInstance.getAddress());
-      expect(
-        await hre.f.SC.repositoryContracts[0].repository.bookKeeper()
-      ).to.equal(await newBookKeeperInstance.getAddress());
+  describe("BookKeeper Management", function () {
+    it("should manage bookKeeper with proper access controls", async function () {
+      const repo = hre.f.SC.repositoryContracts[0].repository;
+
+      // Test access control
+      await expect(repo.connect(controller).setBookKeeper(controller.address))
+        .to.be.revertedWithCustomError(repo, "OnlyOwner");
+
+      // Test owner can set bookKeeper
+      const newBookKeeper = await ethers.getContractFactory("AccountNFTBookKeeper");
+      const newBookKeeperInstance = await newBookKeeper.deploy();
+      await newBookKeeperInstance.waitForDeployment();
+      const newBookKeeperAddress = await newBookKeeperInstance.getAddress();
+
+      await repo.connect(owner).setBookKeeper(newBookKeeperAddress);
+      expect(await repo.bookKeeper()).to.equal(newBookKeeperAddress);
     });
   });
 
-  describe("Add/remove controller", function () {
-    it("should revert if caller is not the owner - add controller", async function () {
-      await expect(
-        hre.f.SC.repositoryContracts[0].repository
-          .connect(hre.f.SC.repositoryContracts[0].controller)
-          .setIsController(hre.f.SC.repositoryContracts[0].controller, true)
-      ).to.be.revertedWithCustomError(
-        hre.f.SC.repositoryContracts[0].repository,
-        "OnlyOwner"
-      );
-    });
+  describe("Controller Management", function () {
+    it("should manage controllers with proper access controls", async function () {
+      const repo = hre.f.SC.repositoryContracts[0].repository;
 
-    it("Owner should be able to add new controller", async function () {
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].owner)
-        .setIsController(await hre.f.alice.getAddress(), true);
-      expect(
-        await hre.f.SC.repositoryContracts[0].repository.isController(
-          await hre.f.alice.getAddress()
-        )
-      ).to.equal(true);
-    });
+      // Test access control
+      await expect(repo.connect(controller).setIsController(controller.address, true))
+        .to.be.revertedWithCustomError(repo, "OnlyOwner");
 
-    it("should revert if caller is not the owner - remove controller", async function () {
-      await expect(
-        hre.f.SC.repositoryContracts[0].repository
-          .connect(hre.f.SC.repositoryContracts[0].controller)
-          .setIsController(hre.f.SC.repositoryContracts[0].controller, true)
-      ).to.be.to.be.revertedWithCustomError(
-        hre.f.SC.repositoryContracts[0].repository,
-        "OnlyOwner"
-      );
-    });
+      // Test owner can add controller
+      await repo.connect(owner).setIsController(alice.address, true);
+      expect(await repo.isController(alice.address)).to.equal(true);
 
-    it("Owner should be able to remove controller", async function () {
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].owner)
-        .setIsController(await hre.f.alice.getAddress(), true);
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].owner)
-        .setIsController(await hre.f.alice.getAddress(), false);
-      expect(
-        await hre.f.SC.repositoryContracts[0].repository.isController(
-          await hre.f.alice.getAddress()
-        )
-      ).to.equal(false);
+      // Test owner can remove controller
+      await repo.connect(owner).setIsController(alice.address, false);
+      expect(await repo.isController(alice.address)).to.equal(false);
     });
   });
 
-  describe("Repository - licensingFeeRate test", () => {
-    it("Can set fees as controller", async () => {
-      const newFeeRate = toBN("0.01");
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .setLicensingFeeRate(newFeeRate);
-      const feeRate =
-        await hre.f.SC.repositoryContracts[0].repository.licensingFeeRate();
-      expect(feeRate).to.be.eq(newFeeRate);
-    });
+  describe("Repository Token Management", () => {
+    it("should prevent setting repository token twice", async function () {
+      const repo = hre.f.SC.repositoryContracts[0].repository;
+      const TEST_CONSTANTS = await getTestConstants();
 
-    it("Can not set fees > 5%", async () => {
-      const newFeeRate = toBN("0.06");
-      await expect(hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .setLicensingFeeRate(newFeeRate)).to.be.revertedWithCustomError(hre.f.SC.repositoryContracts[0].repository, "InvalidFeeRate");
-    });
-
-    it("Cannot set fees as not controller", async () => {
-      const newFeeRate = toBN("0.01");
-
-      await expect(
-        hre.f.SC.repositoryContracts[0].repository
-          .connect(hre.f.SC.userAccount)
-          .setLicensingFeeRate(newFeeRate)
-      ).to.be.revertedWithCustomError(
-        hre.f.SC.repositoryContracts[0].repository,
-        "OnlyController"
+      // Deploy a second repository token
+      const RepositoryTokenFactory = await ethers.getContractFactory("RepositoryToken");
+      const secondRepositoryToken = await RepositoryTokenFactory.deploy(
+        "SecondRepositoryToken",
+        "STK2",
+        TEST_CONSTANTS.ZERO_ADDRESS,
+        repo.getAddress()
       );
+
+      // Should fail when trying to set repository token again
+      await expect(repo.connect(owner).setRepositoryToken(await secondRepositoryToken.getAddress()))
+        .to.be.revertedWithCustomError(repo, "RepositoryTokenAlreadySet");
+    });
+
+    it("should prevent enabling deposits/withdrawals before repository token is set", async function () {
+      // Create a fixture without setting the repository token
+      const fixtureWithoutToken = createFixture('simple', 'none', 'API', true, 0, "0", false);
+      await loadFixture(fixtureWithoutToken);
+
+      const repo = hre.f.SC.repositoryContracts[0].repository;
+      const testController = hre.f.SC.repositoryContracts[0].controller;
+
+      // Verify repository token is NOT set
+      expect(await repo.repositoryToken()).to.equal("0x0000000000000000000000000000000000000000");
+
+      // Should fail when trying to enable deposits
+      await expect(repo.connect(testController).setDepositEnabled(true))
+        .to.be.revertedWithCustomError(repo, "RepositoryTokenNotSet");
+
+      // Should fail when trying to enable withdrawals
+      await expect(repo.connect(testController).setWithdrawEnabled(true))
+        .to.be.revertedWithCustomError(repo, "RepositoryTokenNotSet");
+    });
+  });
+
+  describe("Licensing Fee Management", () => {
+    it("should manage licensing fees with proper validation", async () => {
+      const repo = hre.f.SC.repositoryContracts[0].repository;
+
+      // Test access control
+      await expect(repo.connect(bob).setLicensingFeeRate(toBN("0.01")))
+        .to.be.revertedWithCustomError(repo, "OnlyController");
+
+      // Test valid fee setting
+      const validFeeRate = toBN("0.01");
+      await repo.connect(controller).setLicensingFeeRate(validFeeRate);
+      expect(await repo.licensingFeeRate()).to.be.eq(validFeeRate);
+
+      // Test maximum fee boundary (5% should work)
+      const maxFeeRate = toBN("0.05");
+      await expect(repo.connect(controller).setLicensingFeeRate(maxFeeRate))
+        .to.not.be.rejected;
+
+      // Test fee rate above maximum
+      await expect(repo.connect(controller).setLicensingFeeRate(toBN("0.06")))
+        .to.be.revertedWithCustomError(repo, "InvalidFeeRate");
+      await expect(repo.connect(controller).setLicensingFeeRate(toBN("0.0501")))
+        .to.be.revertedWithCustomError(repo, "InvalidFeeRate");
+    });
+  });
+
+  describe("Controller Permission Lifecycle", function () {
+    it("should properly handle controller permission changes", async function () {
+      const repo = hre.f.SC.repositoryContracts[0].repository;
+
+      // Add alice as controller
+      await repo.connect(owner).setIsController(alice.address, true);
+
+      // Verify alice can perform controller actions
+      const newFeeRate = toBN("0.01");
+      await expect(repo.connect(alice).setLicensingFeeRate(newFeeRate))
+        .to.not.be.rejected;
+
+      // Remove alice as controller
+      await repo.connect(owner).setIsController(alice.address, false);
+
+      // Verify alice can no longer perform controller actions
+      await expect(repo.connect(alice).setLicensingFeeRate(toBN("0.02")))
+        .to.be.revertedWithCustomError(repo, "OnlyController");
     });
   });
 });

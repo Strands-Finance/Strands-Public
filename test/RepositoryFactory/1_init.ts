@@ -1,10 +1,18 @@
-import { seedFixture } from "../../scripts/utils/fixture";
-import { hre } from "../../scripts/utils/testSetup";
+import { hre, expect, ethers, loadFixture, createFixture } from "../helpers/setupTestSystem.js";
 
-const { expect } = require("chai");
+describe(`Repository Factory - Testing (using accountNFTBookKeeper)`, () => {
+  const deployContractsFixture = createFixture(
+    'accountNFT',
+    'none',
+    'API',
+    true,
+    0,
+    "0"
+  );
 
-describe("Repository Factory - Testing (using BookKeeper)", () => {
-  beforeEach(() => seedFixture({}));
+  beforeEach(async () => {
+    await loadFixture(deployContractsFixture);
+  });
 
   describe("Factory Repository - Fixture test", () => {
     it("should create a new Repository contract", async () => {
@@ -21,6 +29,24 @@ describe("Repository Factory - Testing (using BookKeeper)", () => {
       expect(bookKeeper).to.be.eq(
         await hre.f.SC.repositoryContracts[0].bookKeeper.getAddress()
       );
+    });
+  });
+
+  describe("Repository Factory - Array Manipulation Tests", () => {
+    it("should correctly track repository count", async () => {
+      const initialCount = await hre.f.SC.repositoryFactory.repositoryCount();
+      expect(initialCount).to.be.gt(0);
+    });
+
+    it("should verify repository tracking", async () => {
+      const factory = hre.f.SC.repositoryFactory;
+      const count = await factory.repositoryCount();
+
+      // Verify we can access all repositories
+      for (let i = 0; i < Number(count); i++) {
+        const repo = await factory.deployedRepositories(i);
+        expect(repo).to.not.equal("0x0000000000000000000000000000000000000000");
+      }
     });
   });
 });

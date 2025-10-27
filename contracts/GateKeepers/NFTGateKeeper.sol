@@ -16,8 +16,15 @@ contract NFTGateKeeper is GateKeeper, CallBackExclusive {
   /////////////
   event NFTCollectionAddressUpdated(address newAddress);
 
+  /////////////
+  // Errors ///
+  /////////////
+  error InvalidNFTAddress(address providedAddress);
+
   constructor(address nftCollectionAddress_) {
-    require(nftCollectionAddress_ != address(0), "Invalid NFT address");
+    if (nftCollectionAddress_ == address(0)) {
+      revert InvalidNFTAddress(nftCollectionAddress_);
+    }
     nftCollectionAddress = nftCollectionAddress_;
   }
 
@@ -34,7 +41,9 @@ contract NFTGateKeeper is GateKeeper, CallBackExclusive {
   function updateNftCollectionAddress(
     address nftCollectionAddress_
   ) external onlyController {
-    require(nftCollectionAddress_ != address(0), "Invalid NFT address");
+    if (nftCollectionAddress_ == address(0)) {
+      revert InvalidNFTAddress(nftCollectionAddress_);
+    }
     nftCollectionAddress = nftCollectionAddress_;
 
     emit NFTCollectionAddressUpdated(nftCollectionAddress_);

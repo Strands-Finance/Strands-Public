@@ -1,19 +1,9 @@
 //SPDX-License-Identifier: ISC
 
-/**************************************************************
- * ░██████╗████████╗██████╗░░█████╗░███╗░░██╗██████╗░░██████╗ *
- * ██╔════╝╚══██╔══╝██╔══██╗██╔══██╗████╗░██║██╔══██╗██╔════╝ *
- * ╚█████╗░░░░██║░░░██████╔╝███████║██╔██╗██║██║░░██║╚█████╗░ *
- * ░╚═══██╗░░░██║░░░██╔══██╗██╔══██║██║╚████║██║░░██║░╚═══██╗ *
- * ██████╔╝░░░██║░░░██║░░██║██║░░██║██║░╚███║██████╔╝██████╔╝ *
- * ╚═════╝░░░░╚═╝░░░╚═╝░░╚═╝╚═╝░░╚═╝╚═╝░░╚══╝╚═════╝░╚═════╝░ *
- **************************************************************/
-
 pragma solidity ^0.8.20;
 
 // inherited
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./synthetix/DecimalMath.sol";
 import {ConvertDecimals} from "./utils/ConvertDecimals.sol";
 import "./strands/StrandsOwned.sol";
@@ -24,19 +14,23 @@ import {IRepository} from "./interfaces/IRepository.sol";
 import {IGateKeeper} from "./interfaces/IGateKeeper.sol";
 import {IWETH} from "./interfaces/IWETH.sol";
 import {IDecimalMask} from "./interfaces/IDecimalMask.sol";
-import { IStrandsCallback } from "./interfaces/IStrandsCallback.sol";
-import { ReentrancyGuard } from "./libraries/ReentrancyGuard.sol";
-import { IStrandsCallBackControlsInterface } from "./interfaces/IStrandsCallBackControlsInterface.sol";
+import {IStrandsCallback} from "./interfaces/IStrandsCallback.sol";
+import {ReentrancyGuard} from "./libraries/ReentrancyGuard.sol";
+import {IStrandsCallBackControlsInterface} from "./interfaces/IStrandsCallBackControlsInterface.sol";
 
 import {RepositoryToken} from "./RepositoryToken.sol";
 import {RepositoryFactory} from "./RepositoryFactory.sol";
 import {SimpleInitializable} from "./libraries/SimpleInitializable.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-
-contract Repository is IRepository, StrandsOwned, SimpleInitializable, ReentrancyGuard {
+contract Repository is
+  IRepository,
+  StrandsOwned,
+  SimpleInitializable,
+  ReentrancyGuard
+{
   using SafeERC20 for IERC20;
   using DecimalMath for uint;
-  uint private constant YEAR_IN_SECOND = 365 days;
 
   /// @dev the RepositoryToken for the pool
   RepositoryToken public repositoryToken;
@@ -85,19 +79,29 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
   /// @dev if depositAsset is WETH
   bool private _daIsWETH;
   uint8 private _depositDecimals;
-  
+
   // claimable logic
   // @dev claimable amount for each user
-  mapping(address => uint) public claimable; 
+  mapping(address => uint) public claimable;
   // @dev total amount waiting to be claimed
-  uint totalQueuedClaimables = 0;
+  uint public totalQueuedClaimables = 0;
 
   // Callback State
   bool public isCallbackEnabled;
   uint public callbackGasLimit = 0;
 
+  /// @dev Maximum number of items that can be processed in a single batch
+  uint256 public constant MAX_BATCH_SIZE = 100;
+
   // Callback Events
-  event CallBackResulted(address indexed whitelistedContract, address indexed recipient, uint256 amount, uint256 timestamp, IStrandsCallBackControlsInterface.CallbackType callbackType, bool succuess);
+  event CallBackResulted(
+    address indexed whitelistedContract,
+    address indexed recipient,
+    uint256 amount,
+    uint256 timestamp,
+    IStrandsCallBackControlsInterface.CallbackType callbackType,
+    bool succuess
+  );
 
   ////////////////
   // Modifiers ///
@@ -139,28 +143,29 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
    * @param _depositAsset the address of the depositAsset
    * @param _totalValueCap18 the total value cap of the pool
    * @param _licensingFeeRate the licensing fee rate
-   * @param _repositoryTokenName the name of the repository token
-   * @param _repositoryTokenSymbol the symbol of the repository token
    */
-  function init (
+  function init(
     address _executor,
     address _bookKeeper,
     address _gateKeeper,
     address _depositAsset,
     uint _totalValueCap18,
-    uint _licensingFeeRate,
-    string memory _repositoryTokenName,
-    string memory _repositoryTokenSymbol
+    uint _licensingFeeRate
   ) public onlyOwner initializer {
+    if (_executor == address(0)) {
+      revert InvalidAddress("executor");
+    }
+    if (_bookKeeper == address(0)) {
+      revert InvalidAddress("bookKeeper");
+    }
+    if (_depositAsset == address(0)) {
+      revert InvalidAddress("depositAsset");
+    }
+    // Note: _gateKeeper can be address(0) to disable gatekeeper functionality
+
     bookKeeper = IBookKeeper(_bookKeeper);
     gateKeeper = _gateKeeper;
     executor = _executor;
-
-    repositoryToken = new RepositoryToken(
-      _repositoryTokenName,
-      _repositoryTokenSymbol,
-      _gateKeeper
-    );
 
     _depositDecimals = IDecimalMask(_depositAsset).decimals();
     depositAsset = IERC20(_depositAsset);
@@ -172,6 +177,20 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
     }
 
     licensingFeeRate = _licensingFeeRate;
+  }
+
+  /**
+   * @dev Sets the repository token address (must be called after init)
+   * @param _repositoryToken the address of the repository token
+   */
+  function setRepositoryToken(address _repositoryToken) external onlyOwner {
+    if (address(repositoryToken) != address(0)) {
+      revert RepositoryTokenAlreadySet();
+    }
+    if (_repositoryToken == address(0)) {
+      revert InvalidAddress("repositoryToken");
+    }
+    repositoryToken = RepositoryToken(_repositoryToken);
   }
 
   /////////////
@@ -191,8 +210,8 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
    * @param _depositEnabled the flag of new depositEnabled flag
    */
   function setDepositEnabled(bool _depositEnabled) external onlyController {
-    if (depositEnabled == _depositEnabled) {
-      revert AlreadySet();
+    if (address(repositoryToken) == address(0)) {
+      revert RepositoryTokenNotSet();
     }
     depositEnabled = _depositEnabled;
     emit DepositEnabledChanged(_depositEnabled);
@@ -203,6 +222,9 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
    * @param _withdrawEnabled the flag of new depositEnabled flag
    */
   function setWithdrawEnabled(bool _withdrawEnabled) external onlyController {
+    if (address(repositoryToken) == address(0)) {
+      revert RepositoryTokenNotSet();
+    }
     withdrawEnabled = _withdrawEnabled;
   }
 
@@ -211,9 +233,6 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
    * @param _totalValueCap18 new totalValueCap in 1e18 to be set
    */
   function setTotalValueCap18(uint _totalValueCap18) external onlyController {
-    if (totalValueCap18 == _totalValueCap18) {
-      revert AlreadySet();
-    }
     totalValueCap18 = _totalValueCap18;
     emit TotalValueCapChanged(_totalValueCap18);
   }
@@ -223,8 +242,8 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
    * @param _bookKeeper the address of the new bookKeeper
    */
   function setBookKeeper(IBookKeeper _bookKeeper) external onlyOwner {
-    if (bookKeeper == _bookKeeper) {
-      revert AlreadySet();
+    if (address(_bookKeeper) == address(0)) {
+      revert InvalidAddress("bookKeeper");
     }
     bookKeeper = _bookKeeper;
     emit BookKeeperChanged(address(_bookKeeper));
@@ -235,21 +254,17 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
    * @param _gateKeeper the address of the new bookKeeper
    */
   function setGateKeeper(address _gateKeeper) external onlyOwner {
-    if (gateKeeper == _gateKeeper) {
-      revert AlreadySet();
-    }
-
     gateKeeper = _gateKeeper;
     emit GateKeeperChanged(address(_gateKeeper));
   }
 
   /**
-   * @dev Sets the controller address
-   * @param _executor the address of the new controller
+   * @dev Sets the executor address
+   * @param _executor the address of the new executor
    */
   function setExecutor(address _executor) external onlyOwner {
-    if (executor == _executor) {
-      revert AlreadySet();
+    if (_executor == address(0)) {
+      revert InvalidAddress("executor");
     }
     executor = _executor;
     emit ExecutorChanged(_executor);
@@ -279,7 +294,10 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
    * @dev Creates a deposit that is queued to be processed
    * @param amount depositAsset amount in native decimal to deposit into the pool
    */
-  function initiateDeposit(uint256 amount, uint256 minTokenAmount) public nonReentrant{
+  function initiateDeposit(
+    uint256 amount,
+    uint256 minTokenAmount
+  ) public nonReentrant {
     _preDepositChecks(amount);
     // transfer depositAsset from msg.sender to this contract
     depositAsset.safeTransferFrom(msg.sender, address(this), amount);
@@ -289,7 +307,9 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
   /**
    * @dev creates a weth initiateDeposit wrapper if user choose to deposit eth
    */
-  function initiateDepositEth(uint minTokenAmount) external payable nonReentrant {
+  function initiateDepositEth(
+    uint minTokenAmount
+  ) external payable nonReentrant {
     _preDepositChecks(msg.value);
     //Check to make sure this function can only be called when depositAsset is WETH
     if (!_daIsWETH) {
@@ -306,7 +326,10 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
    * @param amount number of repository tokens to redeem
    * @param minimumOut minimum amount of depositAsset to receive in depositAsset decimals
    */
-  function initiateWithdraw(uint256 amount, uint minimumOut) external nonReentrant {
+  function initiateWithdraw(
+    uint256 amount,
+    uint minimumOut
+  ) external nonReentrant {
     if (!withdrawEnabled) {
       revert WithdrawNotEnabled();
     }
@@ -332,14 +355,14 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
     // collect fee
     _collectLicensingFee();
 
-    //check input nav vs onchain nav
+    //check input nav vs on-chain nav
     bookKeeper.checkExpectedNAV(nav);
 
     uint tokenAmount = amount18.divideDecimal(nav);
 
     // minting repository tokens
     repositoryToken.mint(recipient, tokenAmount);
-    bookKeeper.markValueOutsideRepositorySettled(false);
+    bookKeeper.markValueOffChainSettled(false);
 
     emit OffChainDepositProcessed(
       recipient,
@@ -364,7 +387,7 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
     // collect fee
     _collectLicensingFee();
 
-    //check input nav vs onchain nav
+    //check input nav vs on-chain nav
     bookKeeper.checkExpectedNAV(nav);
 
     uint amount18 = tokenAmount.multiplyDecimal(nav);
@@ -373,7 +396,7 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
     }
 
     repositoryToken.burn(custodialWallet, tokenAmount);
-    bookKeeper.markValueOutsideRepositorySettled(false);
+    bookKeeper.markValueOffChainSettled(false);
 
     emit OffChainWithdrawalProcessed(
       msg.sender,
@@ -390,6 +413,10 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
    * @param limit the number of deposits to process
    */
   function processDeposits(uint256 limit) external onlyController {
+    if (limit > MAX_BATCH_SIZE) {
+      revert BatchSizeExceedsMaximum(limit, MAX_BATCH_SIZE);
+    }
+
     // collect accrued license fee before processing so NAV is accurate
     _collectLicensingFee();
 
@@ -435,7 +462,11 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
         block.timestamp
       );
 
-      _executeCallback(deposit.recipient, tokenAmount18, IStrandsCallBackControlsInterface.CallbackType.DEPOSIT);
+      _executeCallback(
+        deposit.recipient,
+        tokenAmount18,
+        IStrandsCallBackControlsInterface.CallbackType.DEPOSIT
+      );
     }
     depositHeadToProcess = i;
   }
@@ -445,6 +476,10 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
    * @param limit the number of withdrawals to process
    */
   function processWithdrawals(uint256 limit) external onlyController {
+    if (limit > MAX_BATCH_SIZE) {
+      revert BatchSizeExceedsMaximum(limit, MAX_BATCH_SIZE);
+    }
+
     // collect fee
     _collectLicensingFee();
     uint nav18 = getNAV();
@@ -465,13 +500,15 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
       uint amount = ConvertDecimals.convertFrom18(amount18, _depositDecimals);
       address recipient = withdrawal.recipient;
       if (
-        depositAsset.balanceOf(address(this)) < totalQueuedDeposits + amount
+        depositAsset.balanceOf(address(this)) <
+        totalQueuedDeposits + totalQueuedClaimables + amount
       ) {
         revert InsufficientLocalFundsToProcessRedemption(
           tokenAmount,
           amount,
           depositAsset.balanceOf(address(this)),
           totalQueuedDeposits,
+          totalQueuedClaimables,
           i
         );
       }
@@ -500,7 +537,11 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
         block.timestamp
       );
 
-      _executeCallback(withdrawal.recipient, amount, IStrandsCallBackControlsInterface.CallbackType.WITHDRAW);
+      _executeCallback(
+        withdrawal.recipient,
+        amount,
+        IStrandsCallBackControlsInterface.CallbackType.WITHDRAW
+      );
     }
 
     withdrawHeadToProcess = i;
@@ -540,6 +581,10 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
       revert WithdrawNotEnabled();
     }
 
+    if (refundAddresses.length > MAX_BATCH_SIZE) {
+      revert BatchSizeExceedsMaximum(refundAddresses.length, MAX_BATCH_SIZE);
+    }
+
     // checks that the address has repository tokens and if it does then add it to the withdrawal queue
     for (uint i = 0; i < refundAddresses.length; i++) {
       uint tokenAmount = repositoryToken.balanceOf(refundAddresses[i]);
@@ -577,18 +622,22 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
       revert InvalidAmount();
     }
 
-    if (depositAsset.balanceOf(address(this)) < amount + totalQueuedDeposits) {
+    if (
+      depositAsset.balanceOf(address(this)) <
+      amount + totalQueuedDeposits + totalQueuedClaimables
+    ) {
       revert InsufficientLocalBalanceToTransfer(
         amount,
         depositAsset.balanceOf(address(this)),
         totalQueuedDeposits,
+        totalQueuedClaimables,
         msg.sender
       );
     }
 
     depositAsset.safeTransfer(executor, amount);
 
-    bookKeeper.markValueOutsideRepositorySettled(false);
+    bookKeeper.markValueOffChainSettled(false);
     emit FundsRemovedFromPool(msg.sender, executor, amount, block.timestamp);
   }
 
@@ -602,7 +651,7 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
    * @dev Redeems User redeem their processed withdrawal
    * @param recipient addresses of the recipients
    */
-  function reedemClaimableDelegated(
+  function redeemClaimableDelegated(
     address[] calldata recipient
   ) external onlyController {
     for (uint i = 0; i < recipient.length; i++) {
@@ -634,36 +683,39 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
   }
 
   /**
-   * @dev Returns the price of a single token in 1e18 based on the total pool value and total token supply.
-   * @return price of single token
+   * @dev Returns the price in USD term of a single token in 18 decimals based on the total pool value and total token supply.
+   * @return price of single token in 18 decimals (standardized)
    */
   function getNAV() public view returns (uint) {
-    return bookKeeper.getNAV();
+    (uint navUsd, ) = bookKeeper.getNAV();
+    return navUsd;
   }
 
   /**
-   * @dev Returns the AUM in protocol including pending deposits and
-   *      value outside repository contract (eg executor or off chain if applicable)
-   * @return AUM in 1e18
+   * @dev Returns the AUM in protocol in USD term
+   * @return AUM in 18 decimals (standardized)
    */
   function getAUM() external view returns (uint) {
-    return bookKeeper.getAUM();
+    (uint aumUsd, ) = bookKeeper.getAUM();
+    return aumUsd;
   }
 
   /**
    * @dev Returns last known AUM in pool and timestamp
-   * @return AUM in 1e18
+   * @return AUM in 18 decimals and timestamp
    */
   function getLastKnownAUM() external view returns (uint, uint) {
-    return bookKeeper.getLastKnownAUM();
+    (uint aumUsd, , uint timestamp) = bookKeeper.getLastKnownAUM();
+    return (aumUsd, timestamp);
   }
 
   /**
-   * @dev Returns last known AUM in pool and timestamp
-   * @return AUM in 1e18
+   * @dev Returns last known NAV in pool and timestamp
+   * @return NAV in 18 decimals and timestamp
    */
   function getLastKnownNAV() external view returns (uint, uint) {
-    return bookKeeper.getLastKnownNAV();
+    (uint navUsd, , uint timestamp) = bookKeeper.getLastKnownNAV();
+    return (navUsd, timestamp);
   }
 
   /**
@@ -678,7 +730,7 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
   /////////////////////////
   // INTERNAL FUNCTIONS ///
   /////////////////////////
-  
+
   /**
    * @dev Internal function to redeem claimable amount
    * @param recipient address of the recipient
@@ -686,6 +738,7 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
   function _redeemClaimable(address recipient) internal {
     uint amount = claimable[recipient];
     claimable[recipient] = 0;
+    totalQueuedClaimables -= amount;
 
     if (amount == 0) {
       revert InvalidAmount();
@@ -695,7 +748,11 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
 
     emit ClaimRedeemed(recipient, block.timestamp, amount);
 
-    _executeCallback(recipient, amount, IStrandsCallBackControlsInterface.CallbackType.CLAIM);
+    _executeCallback(
+      recipient,
+      amount,
+      IStrandsCallBackControlsInterface.CallbackType.CLAIM
+    );
   }
 
   /**
@@ -706,11 +763,12 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
   function _getLicenseFeeAccrued(
     uint totalSupply
   ) internal view returns (uint) {
+    (, uint navDepositAsset) = bookKeeper.getNAV();
     uint proRate = (licensingFeeRate *
-      (block.timestamp - lastFeeCollectionTime)) / YEAR_IN_SECOND;
-    uint licenseFee18 = totalSupply.multiplyDecimal(getNAV()).multiplyDecimal(
-      proRate
-    );
+      (block.timestamp - lastFeeCollectionTime)) / 365 days;
+    uint licenseFee18 = totalSupply
+      .multiplyDecimal(navDepositAsset)
+      .multiplyDecimal(proRate);
     return licenseFee18;
   }
 
@@ -764,10 +822,7 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
    * @param recipient address of the recipient
    * @param amount amount of depositAsset
    */
-  function _createClaimable(
-    address recipient,
-    uint amount
-  ) internal {
+  function _createClaimable(address recipient, uint amount) internal {
     claimable[recipient] += amount;
     totalQueuedClaimables += amount;
 
@@ -783,6 +838,10 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
       revert DepositNotEnabled();
     }
 
+    if (amount == 0) {
+      revert InvalidAmount();
+    }
+
     // Check user can deposit to repository
     if (gateKeeper != address(0)) {
       IGateKeeper gt = IGateKeeper(gateKeeper);
@@ -794,10 +853,6 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
     // Check totalValueCap amount overflow
     if (bookKeeper.isCapReached(amount)) {
       revert TotalValueCapReached();
-    }
-
-    if (amount == 0) {
-      revert InvalidAmount();
     }
   }
 
@@ -837,7 +892,6 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
     uint256 minimumOut,
     address recipient
   ) internal {
-
     if (tokenAmount == 0) {
       revert InvalidAmount();
     }
@@ -880,16 +934,18 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
 
     if (totalSupply > 0) {
       uint licenseFee = ConvertDecimals.convertFrom18(
-         _getLicenseFeeAccrued(totalSupply),
+        _getLicenseFeeAccrued(totalSupply),
         _depositDecimals
       );
       if (
-        depositAsset.balanceOf(address(this)) < licenseFee + totalQueuedDeposits
+        depositAsset.balanceOf(address(this)) <
+        licenseFee + totalQueuedDeposits + totalQueuedClaimables
       ) {
         revert InsufficientLocalBalanceToTransfer(
           licenseFee,
           depositAsset.balanceOf(address(this)),
           totalQueuedDeposits,
+          totalQueuedClaimables,
           msg.sender
         );
       }
@@ -908,28 +964,59 @@ contract Repository is IRepository, StrandsOwned, SimpleInitializable, Reentranc
    * @param amount the amount of depositAsset
    * @param callbackType the type of callback
    */
-  function _executeCallback(address recipient, uint256 amount, IStrandsCallBackControlsInterface.CallbackType callbackType) internal {
-    if(!isCallbackEnabled) {
+  function _executeCallback(
+    address recipient,
+    uint256 amount,
+    IStrandsCallBackControlsInterface.CallbackType callbackType
+  ) internal {
+    if (!isCallbackEnabled) {
       return;
     }
 
     bool success = false;
-    IStrandsCallBackControlsInterface.WhitelistedContract memory callbackAddress = IStrandsCallBackControlsInterface(address(gateKeeper)).getCallbackContractForAddress(recipient);
-        
-    if (callbackType == IStrandsCallBackControlsInterface.CallbackType.DEPOSIT) {
-      try IStrandsCallback(callbackAddress.contractAddress).onDepositProcessed{gas: callbackGasLimit}(recipient, amount) {
+    IStrandsCallBackControlsInterface.WhitelistedContract
+      memory callbackAddress = IStrandsCallBackControlsInterface(
+        address(gateKeeper)
+      ).getCallbackContractForAddress(recipient);
+
+    if (
+      callbackType == IStrandsCallBackControlsInterface.CallbackType.DEPOSIT
+    ) {
+      try
+        IStrandsCallback(callbackAddress.contractAddress).onDepositProcessed{
+          gas: callbackGasLimit
+        }(recipient, amount)
+      {
         success = true;
       } catch {}
-    } else if (callbackType == IStrandsCallBackControlsInterface.CallbackType.WITHDRAW) {
-      try IStrandsCallback(callbackAddress.contractAddress).onWithdrawalProcessed{gas: callbackGasLimit}(recipient, amount) {
+    } else if (
+      callbackType == IStrandsCallBackControlsInterface.CallbackType.WITHDRAW
+    ) {
+      try
+        IStrandsCallback(callbackAddress.contractAddress).onWithdrawalProcessed{
+          gas: callbackGasLimit
+        }(recipient, amount)
+      {
         success = true;
-      } catch{}
-    } else if (callbackType == IStrandsCallBackControlsInterface.CallbackType.CLAIM) {
-      try IStrandsCallback(callbackAddress.contractAddress).onClaimProcessOnBehalf{gas: callbackGasLimit}(recipient, amount) {
+      } catch {}
+    } else if (
+      callbackType == IStrandsCallBackControlsInterface.CallbackType.CLAIM
+    ) {
+      try
+        IStrandsCallback(callbackAddress.contractAddress)
+          .onClaimProcessOnBehalf{gas: callbackGasLimit}(recipient, amount)
+      {
         success = true;
       } catch {}
     }
 
-    emit CallBackResulted(callbackAddress.contractAddress, recipient, amount, block.timestamp, callbackType, success);
+    emit CallBackResulted(
+      callbackAddress.contractAddress,
+      recipient,
+      amount,
+      block.timestamp,
+      callbackType,
+      success
+    );
   }
 }

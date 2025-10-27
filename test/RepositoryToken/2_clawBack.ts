@@ -1,52 +1,56 @@
-import { seedFixture } from "../../scripts/utils/fixture";
-import { expect, hre } from "../../scripts/utils/testSetup";
+import { expect, hre, ethers, loadFixture, createFixture, approveAndDeposit, getAlice, getBob } from "../helpers/setupTestSystem.js";
+import { toBN } from "../helpers/testUtils.js";
 
-const { ethers } = require("hardhat");
+describe(`Repository Token - Testing (using accountNFTBookKeeper)`, function () {
+  let alice: any;
+  let bob: any;
 
-describe("Repository Token - Testing (using Normal BookKeeper)", function () {
-  beforeEach(() => seedFixture({}));
+  const deployContractsFixture = createFixture(
+    'accountNFT',
+    'none',
+    'USDC',
+    true,
+    100000,
+    "0"
+  );
+
+  beforeEach(async () => {
+    await loadFixture(deployContractsFixture);
+
+    alice = getAlice();
+    bob = getBob();
+  });
 
   describe("Repository Token - repository owner clawback", () => {
     it("Only repository owner can call the transferFrom", async () => {
-      const amount = ethers.parseUnits("10000", 6);
+      const amount = toBN("10000", 6);
 
-      await hre.f.SC.MockUSDC.connect(hre.f.SC.userAccount).approve(
-        hre.f.SC.repositoryContracts[0].repository.getAddress(),
-        amount
-      );
-
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.userAccount)
-        .initiateDeposit(amount, 0);
-
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.repositoryContracts[0].controller)
-        .processDeposits(1);
+      await approveAndDeposit(bob, amount, true, 'USDC');
 
       await hre.f.SC.repositoryContracts[0].repositoryToken
         .connect(hre.f.SC.repositoryContracts[0].owner)
         .transferFrom(
-          hre.f.SC.userAccount.address,
-          hre.f.alice.address,
+          bob.address,
+          alice.address,
           amount
         );
 
       expect(
         await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          hre.f.alice.address
+          alice.address
         )
       ).to.be.eq(amount);
     });
 
     it("Non owner transfer from will work as normal transferFrom", async () => {
-      const amount = ethers.parseUnits("10000", 6);
+      const amount = toBN("10000", 6);
 
       await expect(
         hre.f.SC.repositoryContracts[0].repositoryToken
           .connect(hre.f.SC.repositoryContracts[0].controller)
           .transferFrom(
-            hre.f.SC.userAccount.address,
-            hre.f.alice.address,
+            bob.address,
+            alice.address,
             amount
           )
       ).to.be.revertedWithCustomError(
@@ -56,14 +60,14 @@ describe("Repository Token - Testing (using Normal BookKeeper)", function () {
     });
 
     it("Non owner transfer from will work as normal transferFrom", async () => {
-      const amount = ethers.parseUnits("10000", 6);
+      const amount = toBN("10000", 6);
 
       await expect(
         hre.f.SC.repositoryContracts[0].repositoryToken
           .connect(hre.f.SC.repositoryContracts[0].controller)
           .transferFrom(
-            hre.f.SC.userAccount.address,
-            hre.f.alice.address,
+            bob.address,
+            alice.address,
             amount
           )
       ).to.be.revertedWithCustomError(
@@ -73,7 +77,7 @@ describe("Repository Token - Testing (using Normal BookKeeper)", function () {
     });
 
     it("Non owner can NOT renonce OwnerTransability", async () => {
-      const amount = ethers.parseUnits("10000", 6);
+      const amount = toBN("10000", 6);
 
       await expect(
         hre.f.SC.repositoryContracts[0].repositoryToken
@@ -95,14 +99,14 @@ describe("Repository Token - Testing (using Normal BookKeeper)", function () {
       ownerTransferable = await hre.f.SC.repositoryContracts[0].repositoryToken.ownerTransferable()
       await expect(ownerTransferable).to.be.false
 
-      const amount = ethers.parseUnits("10000", 6);
+      const amount = toBN("10000", 6);
 
       await expect(
         hre.f.SC.repositoryContracts[0].repositoryToken
           .connect(hre.f.SC.repositoryContracts[0].owner)
           .transferFrom(
-            hre.f.SC.userAccount.address,
-            hre.f.alice.address,
+            bob.address,
+            alice.address,
             amount
           )
       ).to.be.revertedWithCustomError(

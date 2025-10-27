@@ -1,19 +1,18 @@
+import { expect, ethers } from "../helpers/setupTestSystem.js";
 // General
 import "dotenv/config";
-const { expect } = require("chai");
-import { ethers } from "hardhat";
-import { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers";
+// SignerWithAddress is now inferred from ethers.getSigners()
 
 // Types
-import { S1Position } from "../../typechain-types";
+import type { S1Position } from "../../typechain-types/index.js";
 
 describe("S1Position - Testing NFT", () => {
   let S1Position: S1Position,
-    deployer: SignerWithAddress,
-    alice: SignerWithAddress,
-    bob: SignerWithAddress,
-    admin: SignerWithAddress,
-    accounts: SignerWithAddress[];
+    deployer: any,
+    alice: any,
+    bob: any,
+    admin: any,
+    accounts: any[];
 
   // Token url
   const url = "https://pin.ski/41aSODW";

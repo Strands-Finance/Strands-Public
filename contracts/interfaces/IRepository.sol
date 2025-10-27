@@ -1,14 +1,5 @@
 // SPDX-License-Identifier: MIT
 
-/**************************************************************
- * ░██████╗████████╗██████╗░░█████╗░███╗░░██╗██████╗░░██████╗ *
- * ██╔════╝╚══██╔══╝██╔══██╗██╔══██╗████╗░██║██╔══██╗██╔════╝ *
- * ╚█████╗░░░░██║░░░██████╔╝███████║██╔██╗██║██║░░██║╚█████╗░ *
- * ░╚═══██╗░░░██║░░░██╔══██╗██╔══██║██║╚████║██║░░██║░╚═══██╗ *
- * ██████╔╝░░░██║░░░██║░░██║██║░░██║██║░╚███║██████╔╝██████╔╝ *
- * ╚═════╝░░░░╚═╝░░░╚═╝░░╚═╝╚═╝░░╚═╝╚═╝░░╚══╝╚═════╝░╚═════╝░ *
- **************************************************************/
-
 pragma solidity ^0.8.20;
 
 interface IRepository {
@@ -76,7 +67,7 @@ interface IRepository {
   /// @param recipient the address of the address receiving the depositAsset
   /// @param tokenBurned the number of repository tokens burned
   /// @param nav18 the value of the repository token when withdrawal is processed
-  /// @param amount amount of equivalent depositAsset in native decimals (informational, nothing transfered onchain)
+  /// @param amount amount of equivalent depositAsset in native decimals (informational, nothing transferred on-chain)
   /// @param timestamp the time the withdrawal is processed
   event OffChainWithdrawalProcessed(
     address indexed caller,
@@ -189,28 +180,38 @@ interface IRepository {
   // @param sender the address that the funds were sent to
   // @param amount the amount in depositAsset in native decimal that was with drawn
   // @param block.timestamp the timestamp of the withdrawal
-  event WithdrawalClaimed(address indexed sender, uint indexed timestamp, uint amount);
-  
+  event WithdrawalClaimed(
+    address indexed sender,
+    uint indexed timestamp,
+    uint amount
+  );
+
   // @dev emitted event when a claimable is created
   // @param recipient the address that the funds were sent to
   // @param timestamp the timestamp of the withdrawal
   // @param amount the amount in depositAsset in native decimal that was with drawn
-  event ClaimableCreated(address indexed recipient, uint indexed timestamp, uint amount);
+  event ClaimableCreated(
+    address indexed recipient,
+    uint indexed timestamp,
+    uint amount
+  );
 
   // @dev emitted event when a claimable is removed
   // @param recipient the address that the funds were sent to
   // @param timestamp the timestamp of the withdrawal
   // @param amount the amount in depositAsset in native decimal that was with drawn
-  event ClaimRedeemed(address indexed recipient, uint indexed timestamp, uint amount);
+  event ClaimRedeemed(
+    address indexed recipient,
+    uint indexed timestamp,
+    uint amount
+  );
 
   /////////////
   // ERRORS ///
   /////////////
   error NotExecutorOrController();
   error TotalValueCapReached();
-  error InvalidRecipientAddress(address recipient, address sender);
   error InvalidAmount();
-  error DepositAssetTransferFailed(address from, address to, uint amount);
   error OnlyFactoryAllowed(address thrower, address caller, address factory);
   error OnlyBookKeeperAllowed(
     address thrower,
@@ -222,27 +223,27 @@ interface IRepository {
     uint256 amountDepositAsset,
     uint256 balance,
     uint256 totalQueuedDeposits,
+    uint256 totalQueuedClaimables,
     uint id
   );
   error InsufficientLocalBalanceToTransfer(
     uint requestedAmount,
     uint balance,
     uint totalQueuedDeposits,
+    uint totalQueuedClaimables,
     address controller
   );
   error DepositNotEnabled();
   error WithdrawNotEnabled();
-  error OnlyExecutor(address thrower, address caller, address executor);
-  error AlreadySet();
   error NotWhitelisted(address caller);
   error CannnotDepositAssetType();
   error InsufficientRepositoryTokenBalance();
   error InvalidIndex();
   error InvalidFeeRate();
-
-  error NoTokensToRedeem();
-  error NoClaimableAmount();
-  
+  error RepositoryTokenAlreadySet();
+  error RepositoryTokenNotSet();
+  error InvalidAddress(string parameterName);
+  error BatchSizeExceedsMaximum(uint256 requested, uint256 maximum);
 
   function getOwnerAddress() external view returns (address);
   function moveFundsToExecutor(uint amount) external;

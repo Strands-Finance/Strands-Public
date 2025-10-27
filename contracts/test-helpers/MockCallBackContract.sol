@@ -34,7 +34,6 @@ contract MockCallBackContract is IStrandsCallback {
     address recieptient,
     uint amount
   ) external {
-    console.log("Deposit Processed in mock call back contract");
     depositCalled = true;
     emit DepositCallackReceived(recieptient, amount);
   }
@@ -43,7 +42,6 @@ contract MockCallBackContract is IStrandsCallback {
     address recieptient,
     uint amount
   ) external virtual {
-    console.log("Withdrawal Processed in mock call back contract");
     withdrawalCalled = true;
     emit WithdrawalCallbackReceived(recieptient, amount);
   }
@@ -52,7 +50,6 @@ contract MockCallBackContract is IStrandsCallback {
     address recieptient,
     uint amount
   ) external virtual {
-    console.log("Claim Processed in mock call back contract");
     claimCalled = true;
     emit ClaimCallbackReceived(recieptient, amount);
   }

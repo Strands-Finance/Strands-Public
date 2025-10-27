@@ -1,260 +1,161 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {IBookKeeper} from "../interfaces/IBookKeeper.sol";
 import {IStrandsAccount} from "../interfaces/IStrandsAccount.sol";
-import "../synthetix/Owned.sol";
-import {Repository} from "../Repository.sol";
-import {RepositoryToken} from "../RepositoryToken.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "../libraries/SimpleInitializable.sol";
-import {ConvertDecimals} from "../utils/ConvertDecimals.sol";
+import {BookKeeper} from "./BookKeeper.sol";
 import "../synthetix/DecimalMath.sol";
-import "../libraries/FixedPointMathLib.sol";
-import {IDecimalMask} from "../interfaces/IDecimalMask.sol";
 
-// This contract is written to get valueOutsideRepository from accountNFT
-contract AccountNFTBookKeeper is IBookKeeper, Owned, SimpleInitializable {
+// This contract is written to get valueOffChain from accountNFT
+contract AccountNFTBookKeeper is BookKeeper {
   using DecimalMath for uint;
 
-  Repository public repository;
-  RepositoryToken private _repositoryToken;
-  IERC20 private _depositAsset;
-  uint8 private _depositDecimals;
-  bool public valueOutsideRepositorySettled; // flag funds settled or not
-  uint public valueOutsideRepository18 = 0; //value outside repository in 18 decimals
-  uint public valueStaleTimestamp = 0; //default to 0 so we don't flag valueOutsideRepository as stale initially
-
-  /// @dev Last snapshot of valid AUM and nav, in case real time
-  ///      info are not available for the front end
-  uint public lastKnownNAV18 = 1 ether;
-  uint public lastKnownAUM = 0;
-  uint public lastKnownTimestamp = block.timestamp;
+  bool public valueOffChainSettled; // flag funds settled or not
+  uint public valueOffChain18 = 0; //value off chain in 18 decimals
+  uint public valueOffChainStaleTS = 0; //default to 0 so we don't flag valueOffChain as stale initially
 
   address public accountNFT;
   uint public accountTokenId;
 
-  /// @dev acceptable margin of error between current vs expected NAV
-  uint public acceptableMarginOfError = 0;
-
-  constructor() Owned() {}
-
-  /// @dev Initalizes the book keeper with the depositAsset feed data and the repository
-  /// @param _repository the repository associated with this book keeper
-  function init(address _repository) external onlyOwner initializer {
-    if (address(_repository) == address(0))
-      revert repositoryCannotBeZeroAddress();
-    repository = Repository(_repository);
-    require(
-      address(repository.bookKeeper()) == address(this),
-      "Wrong repository"
-    );
-    _repositoryToken = repository.repositoryToken();
-    _depositAsset = repository.depositAsset();
-    _depositDecimals = IDecimalMask(address(_depositAsset)).decimals();
-  }
+  constructor() BookKeeper() {}
 
   function setAccountNFT(
     address _accountNFT,
     uint _tokenId
-  ) external onlyOwner {
+  ) external onlyOwner validAddress(_accountNFT) {
     accountNFT = _accountNFT;
     accountTokenId = _tokenId;
-    valueOutsideRepositorySettled = false;
+    valueOffChainSettled = false;
   }
 
-  /// @dev mark valueOutsideRepositorySettled to true
+  /// @dev mark valueOffChainSettled to true
   /// @dev repository or repository controller can call this
-  function markValueOutsideRepositorySettled(
-    bool _valueOutsideRepositorySettled
+  function markValueOffChainSettled(
+    bool _valueOffChainSettled
   ) external {
     if (
       !repository.isController(msg.sender) && address(repository) != msg.sender
     ) {
       revert OnlyRepositoryOrController();
     }
-    valueOutsideRepositorySettled = _valueOutsideRepositorySettled;
+    valueOffChainSettled = _valueOffChainSettled;
   }
 
-  function updateValueOutsideRepository18(
+  function updateValueOffChain18(
     uint validFor,
     uint expectedNAV
   ) external onlyRepositoryController {
     if (accountNFT == address(0)) {
       revert AccountNFTNotSet();
     }
-    valueOutsideRepository18 = IStrandsAccount(accountNFT).getAccountValue(
-      accountTokenId
-    );
+    int value = IStrandsAccount(accountNFT).getAccountValue(accountTokenId);
+    if (value < 0) {
+      revert AccountNFTValueMustBePositive(value);
+    }
+    valueOffChain18 = uint(value);
 
     uint ts = IStrandsAccount(accountNFT).getStatementTimestamp(accountTokenId);
 
-    require(ts > 0, "Account doesnt exist");
-    valueStaleTimestamp = ts + validFor;
+    if (ts == 0) {
+      revert AccountDoesNotExist(accountTokenId);
+    }
+    valueOffChainStaleTS = ts + validFor;
 
     lastKnownTimestamp = block.timestamp;
-    lastKnownAUM = _getAUM();
-    lastKnownNAV18 = _getNAV();
+    lastKnownUsdAUM = _getAUM();
+    lastKnownUsdNAV18 = _getNAV();
 
     _checkExpectedNAV(expectedNAV);
 
-    emit valueOutsideRepositoryUpdated(
-      valueOutsideRepository18,
-      block.timestamp,
-      msg.sender
-    );
-    emit NAVUpdated(lastKnownNAV18, block.timestamp, msg.sender);
-    emit AUMUpdated(lastKnownAUM, block.timestamp, msg.sender);
+    emit valueOffChainUpdated(valueOffChain18, block.timestamp, msg.sender);
+    emit NAVUpdated(lastKnownUsdNAV18, block.timestamp, msg.sender);
+    emit AUMUpdated(lastKnownUsdAUM, block.timestamp, msg.sender);
   }
 
-  /// @dev Set acceptable margin of error between current vs expected NAV
-  /// @param _marginOfError acceptable margin of error
-  function setAcceptableMarginOfError(
-    uint _marginOfError
-  ) external override onlyRepositoryController {
-    acceptableMarginOfError = _marginOfError;
-  }
-
-  /// @dev Returns the AUM of the pool, revert if valueOutsideRepository is not up to date
-  function getAUM() external view override returns (uint) {
+  /// @dev Returns the AUM of the pool in terms of both usd and depositAsset, revert if valueOffChain is not up to date
+  function getAUM()
+    external
+    view
+    override
+    returns (uint aumUsd, uint aumDepositAsset)
+  {
     if (accountNFT == address(0)) {
       revert AccountNFTNotSet();
     }
-    if (valueStaleTimestamp > 0 && valueStaleTimestamp < block.timestamp) {
-      revert MarkedValueStale(block.timestamp, valueStaleTimestamp);
+    if (valueOffChainStaleTS > 0 && valueOffChainStaleTS < block.timestamp) {
+      revert MarkedValueStale(block.timestamp, valueOffChainStaleTS);
     }
 
-    if (!valueOutsideRepositorySettled) {
-      revert ValueOutsideRepositoryNotSettled();
+    if (!valueOffChainSettled) {
+      revert ValueOffChainNotSettled();
     }
-
-    return _getAUM();
+    aumUsd = _getAUM();
+    aumDepositAsset = _convertUsdToDepositAsset(aumUsd);
   }
 
   /**
-   * @dev Use to process deposits/withdrawals so valueOutsideRepository absolutely have to be up to date or it would revert
-   * @return The price of a repository token.
+   * @dev Use to process deposits/withdrawals so valueOffChain absolutely have to be up to date or it would revert
+   * @return navUsd The NAV in USD units
+   * @return navDepositAsset The NAV in deposit asset units
    */
-  function getNAV() external view override returns (uint) {
+  function getNAV()
+    external
+    view
+    override
+    returns (uint navUsd, uint navDepositAsset)
+  {
     if (accountNFT == address(0)) {
       revert AccountNFTNotSet();
     }
-    if (valueStaleTimestamp > 0 && valueStaleTimestamp < block.timestamp) {
-      revert MarkedValueStale(block.timestamp, valueStaleTimestamp);
+    if (valueOffChainStaleTS > 0 && valueOffChainStaleTS < block.timestamp) {
+      revert MarkedValueStale(block.timestamp, valueOffChainStaleTS);
     }
 
-    if (!valueOutsideRepositorySettled) {
-      revert ValueOutsideRepositoryNotSettled();
+    if (!valueOffChainSettled) {
+      revert ValueOffChainNotSettled();
     }
 
-    return _getNAV();
+    navUsd = _getNAV();
+    navDepositAsset = _convertUsdToDepositAsset(navUsd);
   }
 
-  /// @dev check if totalValueCap is reached
-  /// @param plusAmount additional deposit amount in depositAsset decimals
-  function isCapReached(uint plusAmount) external view override returns (bool) {
-    return
-      lastKnownAUM +
-        ConvertDecimals.convertTo18(
-          repository.totalQueuedDeposits() + plusAmount,
-          _depositDecimals
-        ) >=
-      repository.totalValueCap18();
-  }
+  function checkExpectedNAV(uint expectedNAV) external view override {
+    if (accountNFT == address(0)) {
+      revert AccountNFTNotSet();
+    }
+    if (valueOffChainStaleTS > 0 && valueOffChainStaleTS < block.timestamp) {
+      revert MarkedValueStale(block.timestamp, valueOffChainStaleTS);
+    }
 
-  function checkExpectedNAV(uint expectedNAV) external view {
+    if (!valueOffChainSettled) {
+      revert ValueOffChainNotSettled();
+    }
+
     _checkExpectedNAV(expectedNAV);
   }
 
-  /// @dev returns AUM and block timestamp
-  function getLastKnownAUM() external view override returns (uint, uint) {
-    return (lastKnownAUM, lastKnownTimestamp);
-  }
+  //AUM = on-chain value + valueOffChain
+  function _getAUM() internal view override returns (uint) {
+    int totalAUM = _getValueOnChain() + int(valueOffChain18);
 
-  /// @dev returns nav in 18 decimal and block timestamp
-  function getLastKnownNAV() external view override returns (uint, uint) {
-    return (lastKnownNAV18, lastKnownTimestamp);
-  }
-
-  // Price of token = processed deposits (so despositAssets balance in repository minus pending deposits) in 1e18 / repository token supply.
-  function _getNAV() private view returns (uint) {
-    uint AUM = _getAUM();
-
-    uint totalTokenSupply = _repositoryToken.totalSupply();
-
-    if (totalTokenSupply > 0 && AUM == 0) {
-      revert("AUM=0 while totalTokenSupply>0");
-    } else if (totalTokenSupply == 0) {
-      return DecimalMath.UNIT;
+    // Only convert to uint at the end, with proper validation
+    if (totalAUM < 0) {
+      revert NonPositiveAUM(totalAUM);
     }
-
-    return AUM.divideDecimal(totalTokenSupply);
-  }
-
-  /// @dev check expectedNAV vs on chain nav
-  ///      main cause of discrepency comes from too much accrued license fee. ie nav drops after collection fee
-  ///      call collectLisenseFee beforehand to avoid this
-  function _checkExpectedNAV(uint expectedNAV) internal view {
-    uint marginOfError = 0;
-    uint currentNAV = _getNAV();
-
-    if (currentNAV > expectedNAV) {
-      marginOfError = (currentNAV - expectedNAV).divideDecimal(currentNAV);
-    } else {
-      marginOfError = (expectedNAV - currentNAV).divideDecimal(currentNAV);
-    }
-    if (marginOfError > acceptableMarginOfError) {
-      revert InconsistentNAV(currentNAV, expectedNAV);
-    }
-  }
-
-  //AUM = despositAssets18 - totalQueuedDeposits18 + value off chain
-  function _getAUM() private view returns (uint) {
-    uint depositAssetBalance18 = ConvertDecimals.convertTo18(
-      _depositAsset.balanceOf(address(repository)),
-      _depositDecimals
-    );
-    uint AUM = valueOutsideRepository18 +
-      depositAssetBalance18 -
-      ConvertDecimals.convertTo18(
-        repository.totalQueuedDeposits(),
-        _depositDecimals
-      );
-
-    return AUM;
-  }
-
-  ///////////////
-  // Modifiers //
-  ///////////////
-
-  modifier onlyRepositoryController() {
-    if (!repository.isController(msg.sender)) {
-      revert OnlyRepositoryController(address(repository), msg.sender);
-    }
-    _;
+    return uint(totalAUM);
   }
 
   ////////////
   // EVENT ///
   ////////////
 
-  event valueOutsideRepositoryUpdated(
-    uint value,
-    uint timestamp,
-    address indexed owner
-  );
+  event valueOffChainUpdated(uint value, uint timestamp, address indexed owner);
   event NAVUpdated(uint value, uint timestamp, address indexed owner);
   event AUMUpdated(uint value, uint timestamp, address indexed owner);
 
   // ERRORS
-  error AccountStatementStale(
-    uint curBlockTimestamp,
-    uint accountStatementStaleTimestamp
-  );
-  error MarkedValueStale(
-    uint curBlockTimestamp,
-    uint markedValueStaleTimestamp
-  );
+  // MarkedValueStale error inherited from IBookKeeper
+  // NonPositiveAUM error inherited from IBookKeeper
   error AccountNFTNotSet();
+  error AccountNFTValueMustBePositive(int value);
+  error AccountDoesNotExist(uint tokenId);
 }

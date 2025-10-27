@@ -1,5 +1,5 @@
-import { BigNumberish } from "ethers";
-import { ethers } from "hardhat";
+// Import ethers directly for scripts
+import { ethers } from "ethers";
 
 // allow for decimals to be passed in up to 9dp of precision
 export function toBN(val: string|number, decimals?: number) {
@@ -34,13 +34,4 @@ export function toBN(val: string|number, decimals?: number) {
     val = x[0] + '.' + x[1];
   }
   return ethers.parseUnits(val, decimals);
-}
-
-export function fromBN(val: BigNumberish, dec?: number): string {
-  return ethers.formatUnits(val, dec || 18);
-}
-
-
-export function toBytes32(msg: string): string {
-  return ethers.encodeBytes32String(msg);
 }

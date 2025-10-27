@@ -1,7 +1,12 @@
-import { ethers, network } from "hardhat";
+import hre from "hardhat";
 import fs from "fs";
 import { exec } from "child_process";
 import path from "path";
+import { fileURLToPath } from "url";
+
+// ESM equivalent of __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 export default async function zipToDeployments(
   key: string,
@@ -9,6 +14,7 @@ export default async function zipToDeployments(
   abiPath: string,
   typeChainPath: string
 ): Promise<void> {
+  const { ethers } = await hre.network.connect();
   const chainId = (await ethers.provider.getNetwork()).chainId.toString();
   const contractFilePath = `./deployments/NFT/${key}/${key}-deployments.json`;
 
@@ -46,13 +52,14 @@ export default async function zipToDeployments(
       jsonKey
     )}`,
     (error, stdout, stderr) => {
-      console.log(stdout);
-      console.log(stderr);
+      if (stdout) console.log(stdout);
+      if (stderr) console.error(stderr);
       if (error !== null) {
-        console.log(`exec error: ${error}`);
+        console.error(`Error copying ABI file: ${error}`);
       }
     }
   );
+
   exec(
     `cp ${typeChainPath} ${path.join(
       __dirname,
@@ -64,10 +71,10 @@ export default async function zipToDeployments(
       tsKey
     )}`,
     (error, stdout, stderr) => {
-      console.log(stdout);
-      console.log(stderr);
+      if (stdout) console.log(stdout);
+      if (stderr) console.error(stderr);
       if (error !== null) {
-        console.log(`exec error: ${error}`);
+        console.error(`Error copying TypeChain file: ${error}`);
       }
     }
   );

@@ -1,11 +1,19 @@
 import { testSystemContracts } from "../deployDemo";
-import { ethers, network } from "hardhat";
+import hre from "hardhat";
 import fs from "fs";
 import { exec } from "child_process";
 import path from "path";
+import { fileURLToPath } from "url";
 import { toBN } from "./web3utils";
-import { ProdSystemContracts } from "../deployCMECC";
-import { BOOK_KEEPER_TYPE, GATE_KEEPER_TYPE } from "../type";
+import { ProdSystemContracts } from "../deployers/BaseDeployer.js";
+import { BOOK_KEEPER_TYPE, GATE_KEEPER_TYPE } from "../config/deploymentConfigs.js";
+
+// In Hardhat v3 with ESM, ethers is available through network.connect()
+const { ethers } = await hre.network.connect();
+
+// Get __dirname equivalent in ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 async function dumpDeploymentsToFile(
   testSystem: testSystemContracts | ProdSystemContracts,
@@ -29,27 +37,27 @@ async function dumpDeploymentsToFile(
     const parentFoldername = contractAddresses[key].parentFolderName;
     const subFolderName = key.split("_")[0];
 
-    // console.log("key=%s",key)
+    // console.log("key=%s parentFoldername=%s",key,parentFoldername)
     if (parentFoldername) {
       let addressFilePath
       // making folder 'deployments/Ananke
       if (!fs.existsSync(`./${zipFolderName}/${parentFoldername}`)) {
-        console.log("no %s %s", parentFoldername, `./${zipFolderName}/${parentFoldername}`)
+        console.log("no %s %s",parentFoldername,`./${zipFolderName}/${parentFoldername}`)
         fs.mkdirSync(`./${zipFolderName}/${parentFoldername}`, { recursive: true });
       }
-
-      if (subFolderName == 'Repository' || subFolderName == 'RepositoryToken') {
+      
+      if (subFolderName=='Repository' || subFolderName=='RepositoryToken') {
         addressFilePath = `./${zipFolderName}/${parentFoldername}/${subFolderName}-deployments.json`;
       } else {
         addressFilePath = `./${zipFolderName}/${parentFoldername}/${subFolderName}/${subFolderName}-deployments.json`;
 
-        // making folder 'deployments/Ananke/BookKeeper
-        if (
-          !fs.existsSync(
-            `./${zipFolderName}/${parentFoldername}/${subFolderName}`
-          )
+       // making folder 'deployments/Ananke/BookKeeper
+       if (
+        !fs.existsSync(
+          `./${zipFolderName}/${parentFoldername}/${subFolderName}`
+        )
         ) {
-          console.log("create folder %s", `./${zipFolderName}/${parentFoldername}/${subFolderName}`)
+          console.log("create folder %s",`./${zipFolderName}/${parentFoldername}/${subFolderName}`)
           fs.mkdirSync(
             `./${zipFolderName}/${parentFoldername}/${subFolderName}`,
             { recursive: true }
@@ -70,6 +78,7 @@ async function dumpDeploymentsToFile(
         existingData = {};
       }
       existingData[testSystem.chainId] = contractAddresses[key].address;
+      // console.log("write to %s: existingData=%s",addressFilePath,existingData)
       await fs.promises.writeFile(
         addressFilePath,
         JSON.stringify(existingData, null, 2)
@@ -79,62 +88,61 @@ async function dumpDeploymentsToFile(
       const tsKey = `${key.split("_")[0]}.ts`;
       let filePath
 
-      filePath = path.join(
+      filePath=path.join(
         __dirname,
         "..",
         "..",
         zipFolderName,
         parentFoldername)
-      if (subFolderName != 'Repository' && subFolderName != 'RepositoryToken') {
-        filePath = path.join(filePath, subFolderName)
+      if (subFolderName!='Repository' && subFolderName!='RepositoryToken') {
+        filePath=path.join(filePath,subFolderName)
       }
       // console.log('filePath=%s',filePath)
       exec(
-        `cp ${contractAddresses[key].abiPath} ${path.join(filePath, jsonKey)}`,
+        `cp ${contractAddresses[key].abiPath} ${path.join(filePath,jsonKey)}`,
         (error, stdout, stderr) => {
-          console.log(stdout);
-          console.log(stderr);
+          if (stdout) console.log(stdout);
+          if (stderr) console.error(stderr);
           if (error !== null) {
-            console.log(`exec error: ${error}`);
+            console.error(`exec error: ${error}`);
           }
         }
       );
       exec(
-        `cp ${contractAddresses[key].typeChainPath} ${path.join(filePath, tsKey)}`,
+        `cp ${contractAddresses[key].typeChainPath} ${path.join(filePath,tsKey)}`,
         (error, stdout, stderr) => {
-          console.log(stdout);
-          console.log(stderr);
+          if (stdout) console.log(stdout);
+          if (stderr) console.error(stderr);
           if (error !== null) {
-            console.log(`exec error: ${error}`);
+            console.error(`exec error: ${error}`);
           }
         }
       );
-    } else {
-      // console.log("  no parentFoldername")
+    } else { //Factory, ERC20
       const jsonKey = `${key}.json`;
       const tsKey = `${key}.ts`;
 
       let filePath
 
-      filePath = path.join(
+      filePath=path.join(
         __dirname,
         "..",
         "..",
         zipFolderName)
 
-      if (subFolderName != 'RepositoryFactory') {
-        filePath = path.join(filePath, 'ERC20')
+      if (subFolderName!='RepositoryFactory') {
+        filePath=path.join(filePath,'ERC20')
         if (!fs.existsSync(filePath)) {
-          console.log("no filePathERC %s", filePath)
+          console.log("no filePathERC %s",filePath)
           fs.mkdirSync(filePath, { recursive: true });
         }
       }
 
-      const contractFilePath = path.join(filePath, key, `${key}-deployments.json`);
+      const contractFilePath = path.join(filePath,key,`${key}-deployments.json`);
       // console.log("contractFilePath=%s",contractFilePath)
 
       if (!fs.existsSync(`${filePath}/${key}`)) {
-        console.log("no filePath %s", `${filePath}/${key}`)
+        console.log("no filePath %s",`${filePath}/${key}`)
         fs.mkdirSync(`${filePath}/${key}`, { recursive: true });
       }
 
@@ -144,6 +152,7 @@ async function dumpDeploymentsToFile(
           encoding: "utf8",
         });
         existingData = JSON.parse(readResult);
+        // console.log("existingData=%s",existingData)
       } catch {
         existingData = {};
       }
@@ -154,24 +163,24 @@ async function dumpDeploymentsToFile(
         JSON.stringify(existingData, null, 2)
       );
 
-
+      
       // console.log('filePath=%s',filePath)
-      exec(`cp ${contractAddresses[key].abiPath} ${path.join(filePath, key, jsonKey)}`,
+      exec(`cp ${contractAddresses[key].abiPath} ${path.join(filePath,key,jsonKey)}`,
         (error, stdout, stderr) => {
-          console.log(stdout);
-          console.log(stderr);
+          if (stdout) console.log(stdout);
+          if (stderr) console.error(stderr);
           if (error !== null) {
-            console.log(`exec error: ${error}`);
+            console.error(`exec error: ${error}`);
           }
         }
       );
       exec(
-        `cp ${contractAddresses[key].typeChainPath} ${path.join(filePath, key, tsKey)}`,
+        `cp ${contractAddresses[key].typeChainPath} ${path.join(filePath,key,tsKey)}`,
         (error, stdout, stderr) => {
-          console.log(stdout);
-          console.log(stderr);
+          if (stdout) console.log(stdout);
+          if (stderr) console.error(stderr);
           if (error !== null) {
-            console.log(`exec error: ${error}`);
+            console.error(`exec error: ${error}`);
           }
         }
       );
@@ -190,18 +199,10 @@ async function getContractAddresses(
     contractAddresses[`Repository_${i}`] = {
       address: await repositoryContract.repository.getAddress(),
       arguments: [
-        repositoryContract.owner,
-        repositoryContract.controller,
-        repositoryContract.executor,
-        repositoryContract.bookKeeper.target,
-        repositoryContract.gateKeeper.target,
-        await repositoryContract.repository.depositAsset(),
-        (await repositoryContract.repository.totalValueCap()).toString(),
-        (await repositoryContract.repository.licensingFeeRate()).toString(),
-        await repositoryContract.repositoryToken.name(),
-        await repositoryContract.repositoryToken.symbol(),
-        testSystem.repositoryFactory.target,
+        typeof repositoryContract.owner === 'string' ? repositoryContract.owner : await repositoryContract.owner.getAddress(),
+        typeof repositoryContract.controller === 'string' ? repositoryContract.controller : await repositoryContract.controller.getAddress()
       ],
+      contract: "contracts/Repository.sol:Repository",
       abi: (await ethers.getContractFactory("Repository")).interface,
       abiPath: `${path.join(
         __dirname,
@@ -209,7 +210,7 @@ async function getContractAddresses(
       )}`,
       typeChainPath: `${path.join(
         __dirname,
-        "../../typechain-types/contracts/Repository.ts"
+        "../../typechain-types/Repository.ts"
       )}`,
       parentFolderName,
     };
@@ -220,6 +221,7 @@ async function getContractAddresses(
       contractAddresses[`BookKeeper_${i}`] = {
         address: await repositoryContract.bookKeeper.getAddress(),
         arguments: [],
+        contract: "contracts/BookKeepers/AccountNFTBookKeeper.sol:AccountNFTBookKeeper",
         abi: (await ethers.getContractFactory("AccountNFTBookKeeper"))
           .interface,
         abiPath: `${path.join(
@@ -228,7 +230,7 @@ async function getContractAddresses(
         )}`,
         typeChainPath: `${path.join(
           __dirname,
-          "../../typechain-types/contracts/BookKeepers/AccountNFTBookKeeper.ts"
+          "../../typechain-types/BookKeepers/AccountNFTBookKeeper.ts"
         )}`,
         parentFolderName,
       };
@@ -239,6 +241,7 @@ async function getContractAddresses(
       contractAddresses[`BookKeeper_${i}`] = {
         address: await repositoryContract.bookKeeper.getAddress(),
         arguments: [],
+        contract: "contracts/BookKeepers/SimpleBookKeeper.sol:SimpleBookKeeper",
         abi: (await ethers.getContractFactory("SimpleBookKeeper"))
           .interface,
         abiPath: `${path.join(
@@ -247,17 +250,18 @@ async function getContractAddresses(
         )}`,
         typeChainPath: `${path.join(
           __dirname,
-          "../../typechain-types/contracts/BookKeepers/SimpleBookKeeper.ts"
+          "../../typechain-types/BookKeepers/SimpleBookKeeper.ts"
         )}`,
         parentFolderName,
       };
-    } else if (
+    }  else if (
       repositoryContract.bookKeeperType ===
       BOOK_KEEPER_TYPE.DIRECT_INPUT_BOOK_KEEPER
-    ) {
+    ){
       contractAddresses[`BookKeeper_${i}`] = {
         address: await repositoryContract.bookKeeper.getAddress(),
         arguments: [],
+        contract: "contracts/BookKeepers/DirectInputBookKeeper.sol:DirectInputBookKeeper",
         abi: (await ethers.getContractFactory("DirectInputBookKeeper")).interface,
         abiPath: `${path.join(
           __dirname,
@@ -265,21 +269,23 @@ async function getContractAddresses(
         )}`,
         typeChainPath: `${path.join(
           __dirname,
-          "../../typechain-types/contracts/BookKeepers/DirectInputBookKeeper.ts"
+          "../../typechain-types/BookKeepers/DirectInputBookKeeper.ts"
         )}`,
         parentFolderName,
       };
     } else {
-      console.log("Unkonwn BK type")
-    };
+      console.log("Unknown BK type")
+    }
 
     contractAddresses[`RepositoryToken_${i}`] = {
       address: await repositoryContract.repositoryToken.getAddress(),
       arguments: [
         await testSystem.repositoryContracts[0].repositoryToken.name(),
         await testSystem.repositoryContracts[0].repositoryToken.symbol(),
-        repositoryContract.gateKeeper.target,
+        await repositoryContract.gateKeeper.getAddress(),
+        await repositoryContract.repository.getAddress(),
       ],
+      contract: "contracts/RepositoryToken.sol:RepositoryToken",
       abi: (await ethers.getContractFactory("RepositoryToken")).interface,
       abiPath: `${path.join(
         __dirname,
@@ -287,7 +293,7 @@ async function getContractAddresses(
       )}`,
       typeChainPath: `${path.join(
         __dirname,
-        "../../typechain-types/contracts/RepositoryToken.ts"
+        "../../typechain-types/RepositoryToken.ts"
       )}`,
       parentFolderName,
     };
@@ -299,6 +305,7 @@ async function getContractAddresses(
       contractAddresses[`GateKeeper_${i}`] = {
         address: await repositoryContract.gateKeeper.getAddress(),
         arguments: [],
+        contract: "contracts/GateKeepers/WhitelistGateKeeper.sol:WhitelistGateKeeper",
         abi: (await ethers.getContractFactory("WhitelistGateKeeper")).interface,
         abiPath: `${path.join(
           __dirname,
@@ -306,7 +313,7 @@ async function getContractAddresses(
         )}`,
         typeChainPath: `${path.join(
           __dirname,
-          "../../typechain-types/contracts/GateKeepers/WhitelistGateKeeper.ts"
+          "../../typechain-types/GateKeepers/WhitelistGateKeeper.ts"
         )}`,
         parentFolderName,
       };
@@ -314,6 +321,7 @@ async function getContractAddresses(
       contractAddresses[`GateKeeper_${i}`] = {
         address: await repositoryContract.gateKeeper.getAddress(),
         arguments: [],
+        contract: "contracts/GateKeepers/NFTGateKeeper.sol:NFTGateKeeper",
         abi: (await ethers.getContractFactory("NFTGateKeeper")).interface,
         abiPath: `${path.join(
           __dirname,
@@ -321,7 +329,7 @@ async function getContractAddresses(
         )}`,
         typeChainPath: `${path.join(
           __dirname,
-          "../../typechain-types/contracts/GateKeepers/NFTGateKeeper.ts"
+          "../../typechain-types/GateKeepers/NFTGateKeeper.ts"
         )}`,
         parentFolderName,
       };
@@ -330,7 +338,8 @@ async function getContractAddresses(
 
   contractAddresses["RepositoryFactory"] = {
     address: await testSystem.repositoryFactory.getAddress(),
-    arguments: [testSystem.deployer.address, testSystem.deployer.address],
+    arguments: [await testSystem.deployer.getAddress(), await testSystem.deployer.getAddress(), await testSystem.MockWETH.getAddress()],
+    contract: "contracts/RepositoryFactory.sol:RepositoryFactory",
     abi: (await ethers.getContractFactory("RepositoryFactory")).interface,
     abiPath: `${path.join(
       __dirname,
@@ -338,7 +347,7 @@ async function getContractAddresses(
     )}`,
     typeChainPath: `${path.join(
       __dirname,
-      "../../typechain-types/contracts/RepositoryFactory.ts"
+      "../../typechain-types/RepositoryFactory.ts"
     )}`,
   };
 
@@ -346,6 +355,7 @@ async function getContractAddresses(
     contractAddresses["USDC"] = {
       address: await testSystem.MockUSDC.getAddress(),
       arguments: ["USDC", "USDC", 6],
+      contract: "contracts/test-helpers/TestERC20SetDecimals.sol:TestERC20SetDecimals",
       abi: (await ethers.getContractFactory("TestERC20SetDecimals")).interface,
       abiPath: `${path.join(
         __dirname,
@@ -353,14 +363,16 @@ async function getContractAddresses(
       )}`,
       typeChainPath: `${path.join(
         __dirname,
-        "../../typechain-types/contracts/test-helpers/TestERC20SetDecimals.ts"
+        "../../typechain-types/test-helpers/TestERC20SetDecimals.ts"
       )}`,
     };
   }
+  
   if (await testSystem.MockWETH) {
     contractAddresses["WETH"] = {
       address: await testSystem.MockWETH.getAddress(),
       arguments: ["WETH", "WETH", 18],
+      contract: "contracts/test-helpers/TestERC20SetDecimals.sol:TestERC20SetDecimals",
       abi: (await ethers.getContractFactory("TestERC20SetDecimals")).interface,
       abiPath: `${path.join(
         __dirname,
@@ -368,15 +380,18 @@ async function getContractAddresses(
       )}`,
       typeChainPath: `${path.join(
         __dirname,
-        "../../typechain-types/contracts/test-helpers/TestERC20SetDecimals.ts"
+        "../../typechain-types/test-helpers/TestERC20SetDecimals.ts"
       )}`,
     };
   }
   if (await testSystem.strandsAPI) {
     contractAddresses["API"] = {
       address: await testSystem.strandsAPI.getAddress(),
-      arguments: [testSystem.repositoryContracts[0].owner,
-      testSystem.repositoryContracts[0].controller],
+      arguments: [
+        typeof testSystem.repositoryContracts[0].owner === 'string' ? testSystem.repositoryContracts[0].owner : await testSystem.repositoryContracts[0].owner.getAddress(),
+        typeof testSystem.repositoryContracts[0].controller === 'string' ? testSystem.repositoryContracts[0].controller : await testSystem.repositoryContracts[0].controller.getAddress()
+      ],
+      contract: "contracts/strands/StrandsAPI.sol:StrandsAPI",
       abi: (await ethers.getContractFactory("StrandsAPI")).interface,
       abiPath: `${path.join(
         __dirname,
@@ -384,7 +399,7 @@ async function getContractAddresses(
       )}`,
       typeChainPath: `${path.join(
         __dirname,
-        "../../typechain-types/contracts/strands/StrandsAPI.ts"
+        "../../typechain-types/strands/StrandsAPI.ts"
       )}`,
     };
   }

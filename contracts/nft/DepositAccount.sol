@@ -122,6 +122,9 @@ contract DepositAccount is ERC721, StrandsOwned {
         ++i;
       }
     }
-    _ownedAccountIds[to].push(id);
+    
+    if (to != address(0)) {
+      _ownedAccountIds[to].push(id);
+    }
   }
 }

@@ -1,65 +1,151 @@
 import "dotenv/config";
-import { ethers } from "hardhat";
+import hre from "hardhat";
 import { DepositAccount } from "../../typechain-types";
-import { etherscanVerification } from "../etherscanVerify";
+import { verifyContractsFromFile } from "../utils/etherscanVerify";
+import { executeWithRetry } from "../utils/deploymentUtils";
 import zipToDeployments from "../utils/nftZip";
+import chalk from "chalk";
 import path from "path";
+import { fileURLToPath } from "url";
+import fs from "fs";
 
+// In Hardhat v3 with ESM, ethers is available through network.connect()
+const { ethers } = await hre.network.connect();
+
+// ESM equivalent of __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Configuration
+const CONFIG = {
+  tokenURI: "https://strands.infura-ipfs.io/ipfs/QmdbqPNXrUKxhfwGzmrAdHeNAPFwcyMqTBYeQitPH7D8YS",
+  name: "Test Deposit Account NFT",
+  symbol: "TSDA",
+  confirmations: 2,
+  controllers: {
+    tim: "0xD7fBc3cD08371400b9e4aaA941D13f7b1c48359A",
+    justin: "0x01D28924E57fe5d244BBDc9eB7cf51217728D9DF",
+    controller: "0xf76236D237847B9030bc251f70b9b26508fa0ed7",
+  },
+  initialMint: {
+    recipient: "0xD7fBc3cD08371400b9e4aaA941D13f7b1c48359A",
+    clearingFirm: "MetCap",
+    accountNumber: "100101963",
+  },
+};
+
+// Helper function for retrying transactions
 async function main() {
-  let myNFT: DepositAccount;
-
-  const TimWallet = process.env.TIM_WALLET_ADDRESS!;
-  const JustinWallet = process.env.JUSTIN_WALLET_ADDRESS!;
-  const controllerWallet = process.env.CONTROLLER_WALLET_ADDRESS!;
-  const AndyWallet = process.env.ANDY_WALLET_ADDRESS!;
-
-  const tokenURI =
-    "https://strands.infura-ipfs.io/ipfs/QmdbqPNXrUKxhfwGzmrAdHeNAPFwcyMqTBYeQitPH7D8YS";
-  const name = "Test Deposit Account NFT";
-  const symbol = "TSDA";
+  console.log(chalk.blue("=== Deposit Account NFT Deployment ===\n"));
 
   const [deployer] = await ethers.getSigners();
+  console.log(chalk.cyan(`Deployer address: ${deployer.address}`));
+  console.log(chalk.cyan(`Network: ${(await ethers.provider.getNetwork()).name}`));
+  console.log(chalk.cyan(`Chain ID: ${(await ethers.provider.getNetwork()).chainId}\n`));
 
-  // Get contract factory
+  // Step 1: Deploy contract
+  console.log(chalk.yellow("Deploying DepositAccount contract..."));
   const myNFTFactory = await ethers.getContractFactory("DepositAccount");
+  const deployment = await myNFTFactory
+    .connect(deployer)
+    .deploy(CONFIG.name, CONFIG.symbol, CONFIG.tokenURI);
 
-  // Deploy the nft
-  myNFT = (await (
-    await myNFTFactory.connect(deployer).deploy(name, symbol, tokenURI)
-  ).waitForDeployment()) as DepositAccount;
+  console.log(chalk.yellow(`Waiting for deployment confirmation...`));
+  const myNFT = (await deployment.waitForDeployment()) as DepositAccount;
+  const address = await myNFT.getAddress();
 
-  console.log("DepositAccount address=%s", await myNFT.getAddress());
+  console.log(chalk.green(`✓ Deployed DepositAccount at: ${address}`));
 
-  // Set token uri
-  await (await myNFT.connect(deployer).setTokenURI(1, tokenURI)).wait(10);
+  // Step 2: Save deployment file (same pattern as deploymentRunner)
+  const deploymentFile = "deploymentDepositAccount";
+  const deploymentData = {
+    DepositAccount: {
+      address: address,
+      arguments: [CONFIG.name, CONFIG.symbol, CONFIG.tokenURI],
+      contract: "contracts/nft/DepositAccount.sol:DepositAccount"
+    }
+  };
+  fs.writeFileSync(
+    `./${deploymentFile}.json`,
+    JSON.stringify(deploymentData, null, 2)
+  );
 
-  // Verify the contract
-  await etherscanVerification(await myNFT.getAddress(), [
-    name,
-    symbol,
-    tokenURI,
-  ]);
-
+  // Save to deployments folder structure
   zipToDeployments(
     "DepositAccount",
-    await myNFT.getAddress(),
+    address,
     `${path.join(
       __dirname,
       "../../artifacts/contracts/nft/DepositAccount.sol/DepositAccount.json"
     )}`,
     `${path.join(
       __dirname,
-      "../../typechain-types/contracts/nft/DepositAccount.ts"
+      "../../typechain-types/nft/DepositAccount.ts"
     )}`
   );
 
-  // Set wallet as the controller
-  await myNFT.connect(deployer).setIsController(AndyWallet, true);
-  await myNFT.connect(deployer).setIsController(JustinWallet, true);
-  await myNFT.connect(deployer).setIsController(controllerWallet, true);
+  // Step 3: Verify on Etherscan (same pattern as deploymentRunner)
+  console.log(chalk.yellow("\n=== Etherscan Verification ==="));
+  const networkName = (await ethers.provider.getNetwork()).name;
+  await verifyContractsFromFile(`./${deploymentFile}.json`, networkName);
 
-  // Mint
-  await myNFT.connect(deployer).mint(TimWallet, "MetCap", "100101963", 0, 0);
+  // Step 4: Set token URI
+  console.log(chalk.blue("\n=== Initial Configuration ==="));
+  await executeWithRetry(
+    async () => {
+      const tx = await myNFT.connect(deployer).setTokenURI(1, CONFIG.tokenURI);
+      await tx.wait(CONFIG.confirmations);
+    },
+    "Set token URI"
+  );
+
+  // Step 5: Set controllers
+  console.log(chalk.blue("\n=== Setting Controllers ==="));
+
+  for (const [name, wallet] of Object.entries(CONFIG.controllers)) {
+    await executeWithRetry(
+      async () => {
+        const tx = await myNFT.connect(deployer).setIsController(wallet, true);
+        await tx.wait(CONFIG.confirmations);
+      },
+      `Set ${name} wallet (${wallet}) as controller`
+    );
+  }
+
+  // Step 6: Initial mint
+  console.log(chalk.blue("\n=== Initial Mint ==="));
+  await executeWithRetry(
+    async () => {
+      const tx = await myNFT
+        .connect(deployer)
+        .mint(
+          CONFIG.initialMint.recipient,
+          CONFIG.initialMint.clearingFirm,
+          CONFIG.initialMint.accountNumber,
+          0,
+          0
+        );
+      await tx.wait(CONFIG.confirmations);
+    },
+    `Mint account to ${CONFIG.initialMint.recipient}`
+  );
+
+  // Step 7: Final verification
+  console.log(chalk.blue("\n=== Deployment Summary ==="));
+  console.log(chalk.green(`Contract: ${address}`));
+  console.log(chalk.green(`Owner: ${await myNFT.owner()}`));
+
+  for (const [name, wallet] of Object.entries(CONFIG.controllers)) {
+    const isController = await myNFT.isController(wallet);
+    console.log(chalk.green(`${name} is controller: ${isController}`));
+  }
+
+  console.log(chalk.blue("\n=== Deployment Complete ===\n"));
 }
 
-main().then((response) => console.log(response));
+main()
+  .then(() => process.exit(0))
+  .catch((error) => {
+    console.error(chalk.red("\n✗ Deployment failed:"), error);
+    process.exit(1);
+  });

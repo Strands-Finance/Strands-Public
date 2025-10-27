@@ -1,19 +1,31 @@
-import { seedFixture } from "../../scripts/utils/fixture";
-import { hre } from "../../scripts/utils/testSetup";
-import { fromBN, toBN } from "../../scripts/utils/web3utils";
+import { hre, expect, ethers, loadFixture, createFixture, getAlice, getBob, approveAndDeposit, approveAndWithdraw } from "../helpers/setupTestSystem.js";
+import { fromBN, toBN } from "../helpers/testUtils.js";
 import chalk from "chalk";
-import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers";
-import {seedWithUSDC} from "../../scripts/seedTestSystem";
 
-const { expect } = require("chai");
-const { ethers } = require("hardhat");
+describe(`Repository Cancelled - Testing (using accountNFTBookKeeper)`, function () {
+  let alice: any;
+  let bob: any;
 
-describe("Repository Cancelled - Testing (using BookKeeper)", function () {
-  beforeEach(() => seedFixture({}));
+  const deployContractsFixture = createFixture(
+    'accountNFT',
+    'none',
+    'USDC',
+    true,
+    100000,
+    "0"
+  );
+
+  beforeEach(async () => {
+    await loadFixture(deployContractsFixture);
+
+    alice = getAlice();
+    bob = getBob();
+  });
+
 
   describe("scenario checks for cancelled - deposit", function () {
     it("check that an order can be cancelled second in the queue", async () => {
-      await createDeposit("10000");
+      await approveAndDeposit(bob, toBN("10000", 6));
       const headId =
         await hre.f.SC.repositoryContracts[0].repository.depositHead();
       // headId points at the next free slot so the first deposit is at headId - 1
@@ -27,10 +39,10 @@ describe("Repository Cancelled - Testing (using BookKeeper)", function () {
 
 
       expect(queuedDeposit[1]).to.be.eq(
-        await hre.f.SC.userAccount.getAddress()
+        await bob.getAddress()
       );
 
-      expect(queuedDeposit[2]).to.be.eq(ethers.parseUnits("10000", 6));
+      expect(queuedDeposit[2]).to.be.eq(toBN("10000", 6));
 
       // cancel the order
       await hre.f.SC.repositoryContracts[0].repository
@@ -46,9 +58,9 @@ describe("Repository Cancelled - Testing (using BookKeeper)", function () {
     it("create a deposit, create another(cancel), create another(deposit) - make sure that they can be processed", async () => {
       const userTokenBalanceBefore =
         await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.SC.userAccount.getAddress()
+          await bob.getAddress()
         );
-      await createDeposit("10000");
+      await approveAndDeposit(bob, toBN("10000", 6));
       const headId =
         await hre.f.SC.repositoryContracts[0].repository.depositHead();
       // headId points at the next free slot so the first deposit is at headId - 1
@@ -57,19 +69,19 @@ describe("Repository Cancelled - Testing (using BookKeeper)", function () {
       const queuedDeposit =
         await hre.f.SC.repositoryContracts[0].repository.depositQueue(1);
       expect(queuedDeposit[1]).to.be.eq(
-        await hre.f.SC.userAccount.getAddress()
+        await bob.getAddress()
       );
-      expect(queuedDeposit[2]).to.be.eq(ethers.parseUnits("10000", 6));
+      expect(queuedDeposit[2]).to.be.eq(toBN("10000", 6));
 
       // create another deposit
-      await createDeposit("20000");
+      await approveAndDeposit(bob, toBN("20000", 6));
       // check that the order is in the queue
       const queuedDeposit2 =
         await hre.f.SC.repositoryContracts[0].repository.depositQueue(2);
       expect(queuedDeposit2[1]).to.be.eq(
-        await hre.f.SC.userAccount.getAddress()
+        await bob.getAddress()
       );
-      expect(queuedDeposit2[2]).to.be.eq(ethers.parseUnits("20000", 6));
+      expect(queuedDeposit2[2]).to.be.eq(toBN("20000", 6));
 
       // cancel the second order
       await hre.f.SC.repositoryContracts[0].repository
@@ -82,15 +94,15 @@ describe("Repository Cancelled - Testing (using BookKeeper)", function () {
       expect(queuedDeposit2Post.isCancelled).to.be.true;
 
       // create another deposit
-      await createDeposit("30000");
+      await approveAndDeposit(bob, toBN("30000", 6));
 
       // check that the order is in the queue
       const nextQueuedDeposit3 =
         await hre.f.SC.repositoryContracts[0].repository.depositQueue(3);
       expect(nextQueuedDeposit3[1]).to.be.eq(
-        await hre.f.SC.userAccount.getAddress()
+        await bob.getAddress()
       );
-      expect(nextQueuedDeposit3[2]).to.be.eq(ethers.parseUnits("30000", 6));
+      expect(nextQueuedDeposit3[2]).to.be.eq(toBN("30000", 6));
 
       // process them all
       await hre.f.SC.repositoryContracts[0].repository
@@ -103,34 +115,26 @@ describe("Repository Cancelled - Testing (using BookKeeper)", function () {
       ).to.be.eq(0);
       const userTokenBalanceAfter =
         await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.SC.userAccount.getAddress()
+          await bob.getAddress()
         );
     });
   });
 
   describe("scenario checks for cancelled - withdraw", function () {
     it("check that an order can be cancelled in the queue", async () => {
-      await createDepositAndProcess(hre.f.SC.userAccount, "10000");
+      await approveAndDeposit(bob, toBN("10000", 6), true);
       // approve repository to spend user's Lp token
       const userLpBalance =
         await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.SC.userAccount.getAddress()
+          await bob.getAddress()
         );
-      await hre.f.SC.repositoryContracts[0].repositoryToken
-        .connect(hre.f.SC.userAccount)
-        .approve(
-          hre.f.SC.repositoryContracts[0].repository.getAddress(),
-          userLpBalance
-        );
-      // withdraw 10k
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(await hre.f.SC.userAccount)
-        .initiateWithdraw(userLpBalance, 0);
+      // Use approveAndWithdraw helper function for withdrawal (without processing)
+      await approveAndWithdraw(bob, userLpBalance, false, 0);
       // check that the order is in the queue
       const nextQueuedWithdraw =
         await hre.f.SC.repositoryContracts[0].repository.withdrawQueue(0);
       expect(nextQueuedWithdraw[1]).to.be.eq(
-        await hre.f.SC.userAccount.getAddress()
+        await bob.getAddress()
       );
       // check that total pending withdraws is not 0
       expect(
@@ -143,7 +147,7 @@ describe("Repository Cancelled - Testing (using BookKeeper)", function () {
       const queuedWithdrawal =
         await hre.f.SC.repositoryContracts[0].repository.withdrawQueue(0);
       expect(queuedWithdrawal[1]).to.be.eq(
-        await hre.f.SC.userAccount.getAddress()
+        await bob.getAddress()
       );
       expect(queuedWithdrawal[2]).to.be.eq(0);
       expect(
@@ -152,34 +156,26 @@ describe("Repository Cancelled - Testing (using BookKeeper)", function () {
     });
 
     it("check an order can be cancelled and the queue can be processed", async () => {
-      await createDepositAndProcess(hre.f.SC.userAccount, "10000");
+      await approveAndDeposit(bob, toBN("10000", 6), true);
       const numOfLpTokens =
         await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.SC.userAccount.getAddress()
-        );
-      await hre.f.SC.repositoryContracts[0].repositoryToken
-        .connect(hre.f.SC.userAccount)
-        .approve(
-          hre.f.SC.repositoryContracts[0].repository.getAddress(),
-          numOfLpTokens
+          await bob.getAddress()
         );
       // check usdc balance of the repository
       const usdcBalanceOfRepository = await hre.f.SC.MockUSDC.balanceOf(
         await hre.f.SC.repositoryContracts[0].repository.getAddress()
       );
-      // withdraw 10k
+      // withdraw 10k - use approveAndWithdraw helper function
       const userTokenBalance =
         await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.SC.userAccount.getAddress()
+          await bob.getAddress()
         );
-      await hre.f.SC.repositoryContracts[0].repository
-        .connect(hre.f.SC.userAccount)
-        .initiateWithdraw(userTokenBalance, 0);
+      await approveAndWithdraw(bob, userTokenBalance, false, 0);
       // check that the order is in the queue
       const nextQueuedWithdraw =
         await hre.f.SC.repositoryContracts[0].repository.withdrawQueue(0);
       expect(nextQueuedWithdraw[1]).to.be.eq(
-        await hre.f.SC.userAccount.getAddress()
+        await bob.getAddress()
       );
       // check that total pending withdraws is not 0
       expect(
@@ -208,7 +204,7 @@ describe("Repository Cancelled - Testing (using BookKeeper)", function () {
 
       expect(
         await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.SC.userAccount.getAddress()
+          await bob.getAddress()
         )
       ).to.be.eq(numOfLpTokens);
 
@@ -221,23 +217,27 @@ describe("Repository Cancelled - Testing (using BookKeeper)", function () {
     });
 
     it("alice, bob initiate withdraw. cancel alice's withdraw. bob withdrawal will be processed", async () => {
-      await seedWithUSDC(hre.f.alice);
-      await createDepositAndProcess(hre.f.alice, "10000");
-      await createDepositAndProcess(hre.f.SC.userAccount, "10000");
+      // Give alice USDC for testing
+      await hre.f.SC.MockUSDC.connect(hre.f.SC.deployer).mint(
+        await alice.getAddress(),
+        toBN("100000", 6)
+      );
+      await approveAndDeposit(alice, toBN("10000", 6), true);
+      await approveAndDeposit(bob, toBN("10000", 6), true);
       const aliceLpBalance =
         await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.alice.getAddress()
+          await alice.getAddress()
         );
       const bobLpBalance =
         await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.SC.userAccount.getAddress()
+          await bob.getAddress()
         );
 
       await hre.f.SC.repositoryContracts[0].repository
-        .connect(await hre.f.alice)
+        .connect(await alice)
         .initiateWithdraw(aliceLpBalance, 0);
       await hre.f.SC.repositoryContracts[0].repository
-        .connect(await hre.f.SC.userAccount)
+        .connect(await bob)
         .initiateWithdraw(bobLpBalance, 0);
 
       await hre.f.SC.repositoryContracts[0].repository
@@ -247,7 +247,7 @@ describe("Repository Cancelled - Testing (using BookKeeper)", function () {
       // alice will get Repository Token back after cancel withdraw
       expect(
         await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.alice.getAddress()
+          await alice.getAddress()
         )
       ).to.be.eq(aliceLpBalance);
 
@@ -256,28 +256,32 @@ describe("Repository Cancelled - Testing (using BookKeeper)", function () {
         .processWithdrawals(1);
       expect(
         await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.SC.userAccount.getAddress()
+          await bob.getAddress()
         )
       ).to.be.eq(0);
     });
     it("alice, bob initiate withdraw. cancel bob's withdraw. alice withdrawal will be processed", async () => {
-      await seedWithUSDC(hre.f.alice);
-      await createDepositAndProcess(hre.f.alice, "10000");
-      await createDepositAndProcess(hre.f.SC.userAccount, "10000");
+      // Give alice USDC for testing
+      await hre.f.SC.MockUSDC.connect(hre.f.SC.deployer).mint(
+        await alice.getAddress(),
+        toBN("100000", 6)
+      );
+      await approveAndDeposit(alice, toBN("10000", 6), true);
+      await approveAndDeposit(bob, toBN("10000", 6), true);
       const aliceLpBalance =
         await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.alice.getAddress()
+          await alice.getAddress()
         );
       const bobLpBalance =
         await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.SC.userAccount.getAddress()
+          await bob.getAddress()
         );
 
       await hre.f.SC.repositoryContracts[0].repository
-        .connect(await hre.f.alice)
+        .connect(await alice)
         .initiateWithdraw(aliceLpBalance, 0);
       await hre.f.SC.repositoryContracts[0].repository
-        .connect(await hre.f.SC.userAccount)
+        .connect(await bob)
         .initiateWithdraw(bobLpBalance, 0);
 
       await hre.f.SC.repositoryContracts[0].repository
@@ -287,7 +291,7 @@ describe("Repository Cancelled - Testing (using BookKeeper)", function () {
       // bob will get Repository Token back after cancel withdraw
       expect(
         await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.SC.userAccount.getAddress()
+          await bob.getAddress()
         )
       ).to.be.eq(bobLpBalance);
 
@@ -296,55 +300,11 @@ describe("Repository Cancelled - Testing (using BookKeeper)", function () {
         .processWithdrawals(1);
       expect(
         await hre.f.SC.repositoryContracts[0].repositoryToken.balanceOf(
-          await hre.f.alice.getAddress()
+          await alice.getAddress()
         )
       ).to.be.eq(0);
     });
   });
 });
 
-async function createDeposit(_amount: string): Promise<void> {
-  const amount = ethers.parseUnits(_amount, 6);
-
-  if (amount < await hre.f.SC.MockUSDC.balanceOf(hre.f.SC.userAccount.address)) {
-    // mint some more mockUSDC
-    await hre.f.SC.MockUSDC.connect(hre.f.SC.repositoryContracts[0].owner).mint(
-      hre.f.SC.userAccount.address,
-      amount
-    );
-  }
-
-  await hre.f.SC.MockUSDC.connect(hre.f.SC.userAccount).approve(
-    hre.f.SC.repositoryContracts[0].repository.getAddress(),
-    amount
-  );
-
-  await hre.f.SC.repositoryContracts[0].repository
-    .connect(hre.f.SC.userAccount)
-    .initiateDeposit(amount, 0);
-
-
-  // console.log(chalk.yellow("Deposit initiated"));
-}
-
-async function createDepositAndProcess(
-  user: SignerWithAddress,
-  _amount: string
-): Promise<void> {
-  const amount = ethers.parseUnits(_amount, 6);
-
-  await hre.f.SC.MockUSDC.connect(user).approve(
-    hre.f.SC.repositoryContracts[0].repository.getAddress(),
-    amount
-  );
-
-  await hre.f.SC.repositoryContracts[0].repository
-    .connect(user)
-    .initiateDeposit(amount, 0);
-  // console.log(chalk.yellow("Deposit initiated"));
-  await hre.f.SC.repositoryContracts[0].repository
-    .connect(hre.f.SC.repositoryContracts[0].controller)
-    .processDeposits(10);
-  // console.log(chalk.yellow("Deposit processed"));
-}
 
